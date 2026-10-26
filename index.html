@@ -328,7 +328,7 @@ details summary{font-size:14.5px}
 
 <script>
 'use strict';
-const APP_VERSION = '1.2';
+const APP_VERSION = '1.2.1';
 /* ---------- Helfer ---------- */
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -1075,7 +1075,13 @@ function accCard(r){
   if(etf){
     if(st.last){
       const g=st.gain;
-      h += `<div class="acc-grid"><div><span>Eingezahlt</span><b>${fmt(st.invested)}</b></div><div><span>${g>=0?'Gewinn':'Verlust'}</span><b class="${g>=0?'gain':'loss'}">${signed(g)}${st.gainPct!=null?` (${fmtPct(st.gainPct)})`:''}</b></div></div>`;
+      if(a.base){
+        h += `<div class="acc-grid"><div><span>Eingezahlt</span><b>${fmt(st.invested)}</b></div><div><span>${g>=0?'Gewinn':'Verlust'}</span><b class="${g>=0?'gain':'loss'}">${signed(g)}${st.gainPct!=null?` (${fmtPct(st.gainPct)})`:''}</b></div></div>`;
+        if(st.gainPct!=null && (st.gainPct > 2 || st.gainPct < -0.8)) h += `<p class="hint" style="margin-top:8px">Gewinn oder Verlust wirken ungewöhnlich hoch. Stimmt der Betrag bei „Insgesamt eingezahlt“? <button data-action="acc-invested" data-id="${esc(a.id)}">Prüfen</button></p>`;
+      } else {
+        h += `<div class="acc-grid"><div><span>Eingezahlt</span><b class="muted">nicht eingetragen</b></div><div><span>Gewinn / Verlust</span><b class="muted">–</b></div></div>`;
+        h += `<p class="hint" style="margin-top:8px">Trage einmal ein, wie viel du insgesamt in diesen ETF eingezahlt hast – dann zeigt die App Gewinn und Rendite richtig an. <button data-action="acc-invested" data-id="${esc(a.id)}">Jetzt eintragen</button></p>`;
+      }
       if(st.move) h += `<p class="acc-move ${st.move.abs>=0?'gain':'loss'}">Seit ${dm(parse(st.move.from))}: ${signed(st.move.abs)}${st.move.pct!=null?` (${fmtPct(st.move.pct)})`:''}</p>`;
       if(st.last.price) h += `<p class="muted" style="margin:6px 0 0;font-size:14px">Kurs ${fmtPrice(st.last.price)}${st.last.pdate ? `, Schlusskurs vom ${dm(parse(st.last.pdate))}` : ''}${st.last.chg!=null ? `, Tagesveränderung <b class="${st.last.chg>=0?'gain':'loss'}">${fmtPct(st.last.chg, 2)}</b>` : ''}${st.last.shares ? `, ${esc(fmtNum(st.last.shares,4))} Anteile${st.last.auto?' (berechnet)':''}` : ''}</p>`;
       if(st.snaps.length >= 2){
@@ -1083,7 +1089,8 @@ function accCard(r){
         const vals = sn.map(x=>x.value), inv = sn.map(x=>investedAt(a, x.date, list));
         if(st.pending){ vals.push(st.value); inv.push(st.invested); }
         const n=vals.length, xl=[{i:0,t:dm(parse(sn[0].date))},{i:n-1,t:st.pending?'heute':dm(parse(sn[sn.length-1].date))}];
-        h += `<div style="margin-top:8px">${svgLines(n,[{vals:inv, cls:'l-cmp'},{vals, cls:'l-sav', area:'a-sav', dot:true, dotCls:'sv'}],{xLabels:xl, aria:'Depotwert und Einzahlungen', fit:true})}<div class="chart-legend"><span><i class="k-bar" style="background:var(--save)"></i>Depotwert</span><span><i class="k-dash"></i>Eingezahlt</span></div></div>`;
+        const series = a.base ? [{vals:inv, cls:'l-cmp'},{vals, cls:'l-sav', area:'a-sav', dot:true, dotCls:'sv'}] : [{vals, cls:'l-sav', area:'a-sav', dot:true, dotCls:'sv'}];
+        h += `<div style="margin-top:8px">${svgLines(n, series, {xLabels:xl, aria:'Depotwert und Einzahlungen', fit:true})}<div class="chart-legend"><span><i class="k-bar" style="background:var(--save)"></i>Depotwert</span>${a.base?'<span><i class="k-dash"></i>Eingezahlt</span>':''}</div></div>`;
       }
     } else {
       h += `<p class="muted" style="margin:4px 0 0;font-size:14px">Bisher nur die Summe deiner Sparbuchungen. Trage den aktuellen Depotwert ein, dann siehst du Gewinn oder Verlust.</p>`;
@@ -1148,7 +1155,7 @@ function openAccForm(a, focus){
   F = {mode:'acc', id:a ? a.id : null, name:a ? a.name : '', icon:a ? a.icon : '🏦', kind:a ? (a.kind||'cash') : 'cash', isin:a && a.isin || '', symbol:a && a.symbol || '', cur:a && a.cur || '', date:todayIso(),
        value: st ? st.value : null, invested: st ? st.invested : null, shares: sb ? sb.shares : '', dirtyV:false, dirtyI:false, dirtyS:false};
   openSheet(accFormHtml(), 'save');
-  const id = focus==='shares' ? 'acc-shares' : focus==='symbol' ? 'acc-symbol' : focus ? 'acc-value' : null;
+  const id = focus==='shares' ? 'acc-shares' : focus==='symbol' ? 'acc-symbol' : focus==='invested' ? 'acc-invested' : focus ? 'acc-value' : null;
   const el = id && $('#'+id);
   if(el){ el.focus({preventScroll:true}); try{ el.select(); }catch(e){} el.scrollIntoView({block:'center'}); }
 }
@@ -1533,6 +1540,7 @@ const A = {
   },
   'acc-save'(){ saveAcc(); },
   quote(el){ const a=accById(el.dataset.id); if(a) fetchQuote(a, el); },
+  'acc-invested'(el){ const a=accById(el.dataset.id); if(a) openAccForm(a, 'invested'); },
   'acc-sym-search'(el){ searchSymbol(el); },
   'acc-sym-pick'(el){ $('#acc-symbol').value = el.dataset.sym; F.symbol = el.dataset.sym; F.cur = el.dataset.cur || ''; $('#acc-sym-results').innerHTML = `<p class="muted" style="margin:8px 0 0;font-size:14px">Ausgewählt: <b>${esc(el.dataset.sym)}</b>${F.cur?` (${esc(F.cur)})`:''}. Zum Übernehmen unten speichern.</p>`; },
   'q-key-save'(){ const k=$('#q-key').value.trim(); if(k && !/^[A-Za-z0-9]{6,64}$/.test(k)){ toast('Der Schlüssel sieht nicht richtig aus (nur Buchstaben und Ziffern).'); return; } setQuoteCfg({on:true, key:k}); refreshSettings(); render(); toast(k ? 'Schlüssel gespeichert' : 'Schlüssel entfernt'); },
