@@ -255,6 +255,28 @@ input,select{font:inherit;color:inherit}
 .csv-out{width:100%;height:140px;margin-top:10px;font:16px/1.4 ui-monospace,Menlo,monospace;border:1px solid var(--line);border-radius:12px;background:var(--bg);padding:10px}
 
 .sync{white-space:nowrap}
+.accs{display:flex;flex-direction:column;gap:12px}
+.acc{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:12px 14px 14px}
+.acc-head{display:flex;align-items:center;gap:12px;width:100%;padding:0;border:0;background:none;text-align:left}
+.acc-head .m{flex:1;min-width:0;display:flex;flex-direction:column}
+.acc-head .c{font-weight:700}
+.acc-head .n{font-size:13.5px;color:var(--muted)}
+.acc-head .chev{font-size:24px;line-height:1;color:var(--muted)}
+.acc-val{margin:10px 0 2px;font:800 32px/1.1 var(--f-display);color:var(--save);font-variant-numeric:tabular-nums}
+.acc-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;margin:8px 0 0}
+.acc-grid span{display:block;font-size:13px;color:var(--muted)}
+.acc-grid b{font-variant-numeric:tabular-nums}
+.acc-move{margin:8px 0 0;font-size:14.5px;font-weight:700}
+.acc .btn{padding:9px 13px;font-size:15px}
+.gain{color:var(--in)}
+.loss{color:var(--out)}
+.sym-hit{display:flex;flex-direction:column;align-items:flex-start;gap:1px;width:100%;margin-top:6px;padding:9px 12px;border:1px solid var(--line);border-radius:12px;background:var(--bg);text-align:left}
+.sym-hit span{font-size:14px}
+.sym-hit small{font-size:12.5px;color:var(--muted)}
+.btn:disabled{opacity:.6}
+.snap-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 0;border-top:1px solid var(--line);font-variant-numeric:tabular-nums}
+.snap-row span:nth-child(2){flex:1;text-align:right}
+.snap-row button{border:0;background:none;color:var(--muted);font-size:20px;padding:0 4px;min-width:30px}
 @media (max-width:360px){
   .app{padding-left:14px;padding-right:14px}
   .top h1{font-size:19px}
@@ -306,6 +328,7 @@ details summary{font-size:14.5px}
 
 <script>
 'use strict';
+const APP_VERSION = '1.2';
 /* ---------- Helfer ---------- */
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -333,15 +356,24 @@ const WDL = ['Sonntag','Montag','Dienstag','Mittwoch','Donnerstag','Freitag','Sa
 const dmy = d => `${pad(d.getDate())}.${pad(d.getMonth()+1)}.${d.getFullYear()}`;
 const dm = d => `${pad(d.getDate())}.${pad(d.getMonth()+1)}.`;
 const newId = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)+Math.random().toString(36).slice(2,10));
-function parseAmount(s){
+function normNum(s){
   s = String(s||'').trim().replace(/[\s€\u00a0]/g,'');
   if(s.includes(',')) s = s.replace(/\./g,'').replace(',','.');
   else if(/^\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g,'');
+  return s;
+}
+function parseMoney(s, allowZero){
+  s = normNum(s);
   if(!/^\d+(\.\d{0,2})?$/.test(s)) return NaN;
   const v = Math.round(parseFloat(s)*100);
-  return v>0 && v<=1e11 ? v : NaN;
+  return (allowZero ? v>=0 : v>0) && v<=1e11 ? v : NaN;
 }
+const parseAmount = s => parseMoney(s, false);
+function parseDecimal(s){ s = normNum(s); if(!/^\d+(\.\d{1,6})?$/.test(s)) return NaN; const v=parseFloat(s); return v>0 && v<1e9 ? v : NaN; }
+const fmtPct = (x, d=1) => (x>=0?'+':'\u2212') + Math.abs(x*100).toFixed(d).replace('.',',') + ' %';
+const fmtNum = (x, d) => Number(x).toLocaleString('de-DE', {maximumFractionDigits:d});
 const amountStr = c => (Math.abs(c)/100).toFixed(2).replace('.',',');
+const amountIn = c => (c<0?'-':'') + (Math.abs(c)/100).toLocaleString('de-DE',{minimumFractionDigits:2, maximumFractionDigits:2});
 
 const ICON = {
   left:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
@@ -355,14 +387,14 @@ const ICON = {
 const DEFAULT_CATS = {
   expense:[['lebensmittel','Lebensmittel','🛒'],['wohnen','Miete & Wohnen','🏠'],['energie','Energie & Nebenkosten','💡'],['mobil','Mobilität','🚗'],['versich','Versicherungen','🛡️'],['kinder','Kinder','🧸'],['gesund','Gesundheit','💊'],['freizeit','Freizeit','🎈'],['essen','Restaurant & Café','☕'],['kleidung','Kleidung','👕'],['abos','Abos & Medien','📺'],['haushalt','Haushalt','🧽'],['geschenke','Geschenke','🎁'],['sonst-a','Sonstiges','📦']],
   income:[['gehalt','Gehalt & Bezüge','💼'],['kindergeld','Kindergeld','👶'],['erstattung','Erstattungen','↩️'],['sonst-e','Sonstiges','➕']],
-  save:[['notgroschen','Notgroschen','🛟'],['etf','ETF & Depot','📈'],['urlaub','Urlaub','✈️'],['anschaffung','Anschaffungen','🎯'],['sonst-s','Sonstiges','🐷']]
+  save:[['tagesgeld','Tagesgeld','🏦'],['etf','ETF-Depot','📈'],['sonst-s','Sonstiges','🐷']]
 };
 const FALLBACK = {expense:'sonst-a', income:'sonst-e', save:'sonst-s'};
 const TYPE_NAME = {expense:'Ausgabe', income:'Einnahme', save:'Sparen'};
 const FREQ = {weekly:'wöchentlich', monthly:'monatlich', quarterly:'vierteljährlich', halfyearly:'halbjährlich', yearly:'jährlich'};
 const FREQ_FACTOR = {weekly:52/12, monthly:1, quarterly:1/3, halfyearly:1/6, yearly:1/12};
 
-function defaultSettings(){ const c={}; for(const k in DEFAULT_CATS) c[k]=DEFAULT_CATS[k].map(([id,name,icon])=>({id,name,icon})); return {v:1, categories:c, recurring:[]}; }
+function defaultSettings(){ const c={}; for(const k in DEFAULT_CATS) c[k]=DEFAULT_CATS[k].map(([id,name,icon])=>k==='save' ? {id,name,icon,kind:id==='etf'?'etf':'cash',snaps:[]} : {id,name,icon}); return {v:2, categories:c, recurring:[]}; }
 const TYPES = ['expense','income','save'];
 const isDate = v => typeof v==='string' && /^\d{4}-\d{2}-\d{2}$/.test(v) && iso(parse(v))===v;
 const str = (v,n) => String(v==null ? '' : v).slice(0,n);
@@ -385,13 +417,44 @@ function cleanRule(r){
   const amount = cleanAmount(r.type, r.amount); if(amount==null) return null;
   return {id:str(r.id,80) || newId(), type:r.type, amount, cat:str(r.cat,60) || FALLBACK[r.type], note:str(r.note,120), freq:r.freq, start:r.start, end:isDate(r.end) ? r.end : null, active:r.active!==false, until:isDate(r.until) ? r.until : null};
 }
+// Hält den Speicherbedarf klein: automatische Kursstände älter als 2 Jahre nur noch einer pro Monat; eigene Einträge bleiben immer.
+function thinSnaps(list){
+  if(list.length <= 1500) return list;
+  const lim = iso(addDays(todayDate(), -730)), lastOfMonth = new Map();
+  for(const x of list) if(x.auto && x.date < lim) lastOfMonth.set(x.date.slice(0,7), x.date);
+  return list.filter(x => !x.auto || x.date >= lim || lastOfMonth.get(x.date.slice(0,7))===x.date);
+}
+const cleanSymbol = v => String(v||'').toUpperCase().replace(/[^A-Z0-9.\-]/g,'').slice(0,20);
+function cleanAcc(c, id){
+  const o = {kind: (c.kind==='etf' || c.kind==='cash') ? c.kind : (id==='etf' ? 'etf' : 'cash')};
+  if(c.isin){ const i=String(c.isin).toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,12); if(i) o.isin=i; }
+  if(c.symbol){ const y=cleanSymbol(c.symbol); if(y) o.symbol=y; }
+  if(c.cur && /^[A-Z]{3}$/.test(String(c.cur))) o.cur=String(c.cur);
+  if(c.base && isDate(c.base.date)){ const inv=Math.round(Number(c.base.invested)); if(Number.isFinite(inv) && Math.abs(inv)<=1e11) o.base={date:c.base.date, at:Number(c.base.at)||0, invested:inv}; }
+  const m = new Map();
+  for(const x of (Array.isArray(c.snaps) ? c.snaps : [])){
+    if(!x || !isDate(x.date)) continue;
+    const v=Math.round(Number(x.value)); if(!Number.isFinite(v) || Math.abs(v)>1e11) continue;
+    const sn={date:x.date, at:Number(x.at)||0, value:v};
+    const sh=Number(x.shares), pr=Number(x.price), ch=Number(x.chg);
+    if(sh>0 && sh<1e9) sn.shares=sh;
+    if(pr>0 && pr<1e7) sn.price=pr;
+    if(x.auto) sn.auto=true;
+    if(isDate(x.pdate)) sn.pdate=x.pdate;
+    if(x.chg!=null && Number.isFinite(ch) && Math.abs(ch)<1) sn.chg=ch;
+    m.set(x.date, sn);
+  }
+  o.snaps = thinSnaps([...m.values()].sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0));
+  return o;
+}
 function normalizeSettings(d){
-  const def = defaultSettings(), out = {v:1, categories:{}, recurring:[]};
+  const def = defaultSettings(), out = {v:2, categories:{}, recurring:[]};
   const src = (d && typeof d==='object') ? d : {};
   for(const k of TYPES){
     const list = src.categories && Array.isArray(src.categories[k]) ? src.categories[k] : def.categories[k];
-    const cats = list.filter(c=>c && c.id).map(c=>{ const o={id:str(c.id,60), name:str(c.name,30) || 'Ohne Namen', icon:firstChars(c.icon,2) || '🏷️'}; if(c.hidden) o.hidden=true; return o; });
-    if(!cats.some(c=>c.id===FALLBACK[k])) cats.push(def.categories[k].find(c=>c.id===FALLBACK[k]));
+    const cats = list.filter(c=>c && c.id).map(c=>{ const o={id:str(c.id,60), name:str(c.name,30) || 'Ohne Namen', icon:firstChars(c.icon,2) || '🏷️'}; if(c.hidden) o.hidden=true; if(k==='save') Object.assign(o, cleanAcc(c, o.id)); return o; });
+    if(!cats.some(c=>c.id===FALLBACK[k])) cats.push(JSON.parse(JSON.stringify(def.categories[k].find(c=>c.id===FALLBACK[k]))));
+    if(k==='save' && !(Number(src.v)>=2) && !cats.some(c=>c.id==='tagesgeld')) cats.unshift({id:'tagesgeld', name:'Tagesgeld', icon:'🏦', kind:'cash', snaps:[]});
     out.categories[k] = cats;
   }
   if(Array.isArray(src.recurring)) for(const r of src.recurring){ const c=cleanRule(r); if(c) out.recurring.push(c); }
@@ -451,6 +514,10 @@ const Store = {
     this.apply(src);
     this.ready = true;
     render();
+    try{
+      const pv = localStorage.getItem('hb-ver');
+      if(pv !== APP_VERSION){ if(pv || S.tx.length) setTimeout(()=>toast(`Update installiert: Version ${APP_VERSION}`), 600); localStorage.setItem('hb-ver', APP_VERSION); }
+    }catch(e){}
     runRecurring();
     try{ if(navigator.storage && navigator.storage.persist){ this.persisted = await navigator.storage.persisted() || await navigator.storage.persist(); } }catch(e){}
   },
@@ -539,6 +606,141 @@ async function runRecurring(){
   } finally { recurringBusy = false; }
 }
 const monthlyEq = r => Math.round(r.amount * (FREQ_FACTOR[r.freq]||1));
+
+/* ---------- Sparkonten ----------
+   Kontostand bzw. Depotwert = zuletzt eingetragener Stand + alle Sparbuchungen danach.
+   Eingezahlt (ETF) = eingetragene Einzahlungssumme + alle Sparbuchungen danach. */
+const accounts = () => S.settings.categories.save;
+const accById = id => accounts().find(a=>a.id===id);
+const isEtf = a => a && a.kind==='etf';
+const endOfDayTs = d => { const x=parse(d); return new Date(x.getFullYear(),x.getMonth(),x.getDate(),23,59,59).getTime(); };
+const afterMark = (t, m) => !m || t.date > m.date || (t.date===m.date && (t.created||0) > (m.at||0));
+const accList = a => S.tx.filter(t=>t.type==='save' && t.cat===a.id);
+function lastSnap(a, d){ const s=a.snaps||[]; for(let i=s.length-1;i>=0;i--) if(s[i].date<=d) return s[i]; return null; }
+function investedAt(a, d, list){ const b = a.base && a.base.date<=d ? a.base : null; let v=b ? b.invested : 0; for(const t of list) if(t.date<=d && afterMark(t,b)) v+=t.amount; return v; }
+function valueAt(a, d, list){ const sn=lastSnap(a,d); if(!sn) return investedAt(a,d,list); let v=sn.value; for(const t of list) if(t.date<=d && afterMark(t,sn)) v+=t.amount; return v; }
+function accStats(a, list){
+  list = list || accList(a); const t=todayIso();
+  const value=valueAt(a,t,list), invested=investedAt(a,t,list);
+  const snaps=(a.snaps||[]).filter(x=>x.date<=t), last=snaps[snaps.length-1]||null, prev=snaps[snaps.length-2]||null;
+  let move=null;
+  if(last && prev){ let dep=0; for(const x of list) if(afterMark(x,prev) && !afterMark(x,last)) dep+=x.amount; const b=prev.value+dep; move={from:prev.date, abs:last.value-b, pct:b>0 ? (last.value-b)/b : null}; }
+  const pending = last ? list.filter(x=>x.date<=t && afterMark(x,last)).length : 0;
+  return {value, invested, gain:value-invested, gainPct: invested>0 ? (value-invested)/invested : null, last, move, pending, snaps};
+}
+
+/* ---------- Kursabruf (optional, nur auf Tippen) ----------
+   Einstellung und Schlüssel liegen nur in diesem Browser (nicht in Sicherungen).
+   Verbindung ausschließlich zu www.alphavantage.co und nur, wenn „Kurs abrufen“ oder „Suchen“ getippt wird. */
+const QKEY = 'hb-quote';
+function quoteCfg(){ const q = LS.get(QKEY); return {on: !!(q && q.on), key: q && typeof q.key==='string' ? q.key : ''}; }
+function setQuoteCfg(q){ LS.set(QKEY, {on:!!q.on, key:String(q.key||'').trim().slice(0,64)}); }
+const quoteReady = () => { const q=quoteCfg(); return q.on && !!q.key; };
+const fmtPrice = p => Number(p).toLocaleString('de-DE', {minimumFractionDigits:2, maximumFractionDigits:4}) + ' €';
+function userErr(msg){ const e = new Error(msg); e.userMsg = msg; return e; }
+async function avRequest(params){
+  const q = quoteCfg();
+  if(!q.on) throw userErr('Der Kursabruf ist ausgeschaltet (Einstellungen).');
+  if(!q.key) throw userErr('Bitte zuerst deinen API-Schlüssel in den Einstellungen eintragen.');
+  if(navigator.onLine === false) throw userErr('Keine Internetverbindung.');
+  const qs = Object.entries({...params, apikey:q.key}).map(([k,v])=>encodeURIComponent(k)+'='+encodeURIComponent(v)).join('&');
+  const ctl = new AbortController(), timer = setTimeout(()=>ctl.abort(), 15000);
+  let res;
+  try{ res = await fetch('https://www.alphavantage.co/query?'+qs, {signal:ctl.signal, cache:'no-store', credentials:'omit', referrerPolicy:'no-referrer', mode:'cors'}); }
+  catch(e){ throw userErr(e && e.name==='AbortError' ? 'Der Kursdienst antwortet nicht. Bitte später erneut versuchen.' : 'Der Kursdienst ist gerade nicht erreichbar. Bitte Internetverbindung prüfen.'); }
+  finally{ clearTimeout(timer); }
+  if(!res.ok) throw userErr(`Der Kursdienst meldet einen Fehler (${res.status}). Bitte später erneut versuchen.`);
+  let d; try{ d = await res.json(); }catch(e){ throw userErr('Unerwartete Antwort vom Kursdienst.'); }
+  if(!d || typeof d!=='object') throw userErr('Unerwartete Antwort vom Kursdienst.');
+  const info = d['Information'] || d['Note'] || d['Error Message'];
+  if(info && Object.keys(d).length <= 2){
+    const t = String(info).toLowerCase();
+    if(t.includes('rate limit') || t.includes('per day') || t.includes('per minute') || t.includes('frequency')) throw userErr('Abruf-Limit des kostenlosen Schlüssels erreicht (25 Abrufe pro Tag). Bitte später erneut versuchen.');
+    if(t.includes('premium')) throw userErr('Diese Abfrage ist beim Kursdienst kostenpflichtig.');
+    if(t.includes('apikey') || t.includes('api key')) throw userErr('Der API-Schlüssel wurde nicht akzeptiert. Bitte in den Einstellungen prüfen.');
+    if(t.includes('invalid api call')) throw userErr('Zu diesem Kürzel kennt der Kursdienst keinen Kurs. Bitte das Kürzel prüfen.');
+    throw userErr('Der Kursdienst hat die Anfrage abgelehnt. Bitte später erneut versuchen.');
+  }
+  return d;
+}
+function parseQuote(d){
+  const g = d['Global Quote'] || d['Global quote'];
+  if(!g || typeof g!=='object' || !Object.keys(g).length) throw userErr('Zu diesem Kürzel wurde kein Kurs gefunden. Tipp: XETRA-Kürzel enden auf .DEX – über „Suchen“ im Konto findest du das richtige.');
+  const pick = re => { const k = Object.keys(g).find(x=>re.test(x)); return k ? String(g[k]).trim() : ''; };
+  const price = parseFloat(pick(/^\s*0?5\.\s*price/i));
+  if(!(price>0) || price>=1e7) throw userErr('Der Kursdienst hat keinen gültigen Kurs geliefert.');
+  const day = pick(/latest trading day/i);
+  const chg = parseFloat(pick(/change percent/i).replace('%',''));
+  return {price, pdate: isDate(day) ? day : todayIso(), chg: Number.isFinite(chg) && Math.abs(chg)<100 ? chg/100 : null};
+}
+function sharesBase(a, d){ const s=(a.snaps||[]).filter(x=>x.shares>0 && x.date<=d); return s.length ? s[s.length-1] : null; }
+function applyQuote(a, q){
+  const t = todayIso(), list = accList(a), base = sharesBase(a, t);
+  if(!base) throw userErr('Für den Kursabruf braucht die App einmal die Anzahl deiner Anteile.');
+  let date = q.pdate > t ? t : q.pdate;
+  const latest = lastSnap(a, t); if(latest && date < latest.date) date = latest.date;
+  const at = date===t ? Date.now() : endOfDayTs(date), mark = {date, at};
+  let dep = 0; for(const x of list) if(afterMark(x, base) && !afterMark(x, mark)) dep += x.amount;
+  const shares = base.shares + dep/100/q.price;
+  if(!(shares>0)) throw userErr('Die Anteile konnten nicht berechnet werden. Bitte Anteile im Konto prüfen.');
+  const value = Math.round(shares*q.price*100);
+  const sn = {date, at, value, shares:Math.round(shares*1e6)/1e6, price:q.price, auto:true, pdate:q.pdate};
+  if(q.chg!=null) sn.chg = q.chg;
+  a.snaps = (a.snaps||[]).filter(x=>x.date!==date); a.snaps.push(sn); a.snaps.sort((x,y)=>x.date<y.date?-1:x.date>y.date?1:0);
+  a.snaps = thinSnaps(a.snaps);
+  Store.saveSettings();
+  return sn;
+}
+let quoteBusy = false, quoteConfirm = null;
+function refPrice(a){ const b = sharesBase(a, todayIso()); if(!b) return null; return b.price > 0 ? b.price : (b.value > 0 ? b.value/100/b.shares : null); }
+async function fetchQuote(a, btn){
+  if(quoteBusy) return;
+  if(!quoteReady()){ toast('Bitte den Kursabruf in den Einstellungen einschalten und den Schlüssel eintragen.'); openSettings(); return; }
+  if(!a.symbol){ toast('Bitte zuerst das Börsenkürzel im Konto eintragen.'); openAccForm(a, 'symbol'); return; }
+  if(a.cur && a.cur!=='EUR'){ toast(`Das Kürzel liefert Kurse in ${a.cur}. Bitte ein Euro-Kürzel wählen, z. B. mit Endung .DEX.`); openAccForm(a, 'symbol'); return; }
+  if(!sharesBase(a, todayIso())){ toast('Bitte einmal die Anzahl deiner Anteile eintragen – danach rechnet die App selbst.'); openAccForm(a, 'shares'); return; }
+  quoteBusy = true; const label = btn ? btn.textContent : '';
+  if(btn){ btn.disabled = true; btn.textContent = 'Rufe Kurs ab …'; }
+  try{
+    const q = parseQuote(await avRequest({function:'GLOBAL_QUOTE', symbol:a.symbol}));
+    const age = daysBetween(parse(q.pdate), todayDate());
+    if(age > 7) throw userErr(`Der letzte verfügbare Kurs ist vom ${dmy(parse(q.pdate))}. Das Kürzel wird offenbar nicht mehr gehandelt – bitte im Konto prüfen.`);
+    const rp = refPrice(a), ratio = rp ? q.price/rp : 1;
+    if(ratio > 1.4 || ratio < 0.6){
+      const ok = quoteConfirm && quoteConfirm.id===a.id && Date.now() < quoteConfirm.until;
+      if(!ok){
+        quoteConfirm = {id:a.id, until:Date.now()+180000};
+        throw userErr(`Achtung: Der Kurs (${fmtPrice(q.price)}) weicht stark vom zuletzt bekannten (${fmtPrice(rp)}) ab – zum Beispiel nach einem Aktiensplit. Prüfe zuerst deine Anteile im Konto. Nur wenn alles stimmt, erneut auf „Kurs abrufen“ tippen.`);
+      }
+    }
+    quoteConfirm = null;
+    const sn = applyQuote(a, q);
+    render();
+    toast(`Schlusskurs vom ${dm(parse(q.pdate))}: ${fmtPrice(q.price)} – Depotwert ${fmt(sn.value)}`);
+  }catch(e){
+    if(btn && btn.isConnected){ btn.disabled = false; btn.textContent = label; }
+    toast(e && e.userMsg ? e.userMsg : 'Der Kurs konnte nicht abgerufen werden.');
+  }finally{ quoteBusy = false; }
+}
+async function searchSymbol(btn){
+  if(quoteBusy) return;
+  if(!quoteReady()){ toast('Bitte den Kursabruf in den Einstellungen einschalten und den Schlüssel eintragen.'); return; }
+  const kw = ($('#acc-symbol').value || '').trim().replace(/\.DEX$/i,'');
+  if(!kw){ toast('Gib ein Stichwort ein, z. B. SPYI oder MSCI ACWI IMI.'); $('#acc-symbol').focus(); return; }
+  quoteBusy = true; const box = $('#acc-sym-results'); const label = btn.textContent; btn.disabled = true; btn.textContent = 'Suche …';
+  try{
+    const d = await avRequest({function:'SYMBOL_SEARCH', keywords:kw.slice(0,40)});
+    const list = (Array.isArray(d.bestMatches) ? d.bestMatches : []).map(m=>{
+      const v = re => { const k=Object.keys(m||{}).find(x=>re.test(x)); return k ? String(m[k]).trim() : ''; };
+      return {sym:cleanSymbol(v(/symbol/i)), name:v(/name/i).slice(0,80), region:v(/region/i).slice(0,30), cur:v(/currency/i).toUpperCase().slice(0,3)};
+    }).filter(x=>x.sym);
+    list.sort((x,y)=>(y.cur==='EUR')-(x.cur==='EUR') || (/\.DEX$/.test(y.sym))-(/\.DEX$/.test(x.sym)));
+    if(box) box.innerHTML = list.length
+      ? `<p class="muted" style="margin:10px 0 6px;font-size:14px">Tippe auf den passenden Eintrag (am besten XETRA in EUR):</p>` + list.slice(0,8).map(x=>`<button class="sym-hit" data-action="acc-sym-pick" data-sym="${esc(x.sym)}" data-cur="${esc(x.cur)}"><b>${esc(x.sym)}</b><span>${esc(x.name)}</span><small>${esc([x.region, x.cur].filter(Boolean).join(', '))}</small></button>`).join('')
+      : `<p class="muted" style="margin:10px 0 0;font-size:14px">Nichts gefunden. Versuche das Börsenkürzel ohne Endung (z. B. SPYI) oder einen Teil des Namens.</p>`;
+  }catch(e){ toast(e && e.userMsg ? e.userMsg : 'Die Suche hat nicht funktioniert.'); }
+  finally{ quoteBusy = false; if(btn.isConnected){ btn.disabled = false; btn.textContent = label; } }
+}
 
 /* ---------- Zeiträume ---------- */
 function rangeFor(unit, anchor){
@@ -637,15 +839,18 @@ function svgBars(items, opts={}){
 function svgLines(n, series, opts={}){
   const W=340, H=168, top=20, bot=22, left=2, right=10;
   const all = series.flatMap(s=>s.vals.filter(v=>v!=null));
-  const lo = Math.min(0, ...all), max = niceMax(Math.max(1, ...all));
+  let lo = Math.min(0, ...all), max = niceMax(Math.max(1, ...all));
+  if(opts.fit && all.length){ const mn=Math.min(...all), mx=Math.max(...all), span=Math.max(mx-mn, Math.abs(mx)*0.02, 100); lo=Math.max(0, mn-span*0.35); max=mx+span*0.2; }
   const x = i => left + (W-left-right) * (n<=1 ? 0 : i/(n-1));
   const y = v => top + (H-top-bot) * (1 - (v-lo)/(max-lo));
-  let g = `<line class="grid" x1="0" x2="${W}" y1="${y(max)}" y2="${y(max)}"/><text class="axis" x="0" y="${y(max)-5}">${fmt0(max)}</text><line class="base" x1="0" x2="${W}" y1="${y(0)}" y2="${y(0)}"/>`;
+  let g = opts.fit ? '' : `<line class="grid" x1="0" x2="${W}" y1="${y(max)}" y2="${y(max)}"/><text class="axis" x="0" y="${y(max)-5}">${fmt0(max)}</text><line class="base" x1="0" x2="${W}" y1="${y(0)}" y2="${y(0)}"/>`;
+  const floor = opts.fit ? H-bot : y(0);
+  if(opts.fit) g += `<line class="base" x1="0" x2="${W}" y1="${H-bot}" y2="${H-bot}"/>`;
   for(const s of series){
     const pts = s.vals.map((v,i)=> v==null ? null : [x(i), y(v)]).filter(Boolean);
     if(!pts.length) continue;
     const d = pts.map((p,i)=>`${i?'L':'M'}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join('');
-    if(s.area) g += `<path class="${s.area}" d="${d}L${pts[pts.length-1][0].toFixed(1)} ${y(0).toFixed(1)}L${pts[0][0].toFixed(1)} ${y(0).toFixed(1)}Z"/>`;
+    if(s.area) g += `<path class="${s.area}" d="${d}L${pts[pts.length-1][0].toFixed(1)} ${floor.toFixed(1)}L${pts[0][0].toFixed(1)} ${floor.toFixed(1)}Z"/>`;
     g += `<path class="${s.cls}" d="${d}"/>`;
     if(s.dot){ const p=pts[pts.length-1], v=s.vals.filter(v=>v!=null).pop(); const anchor = p[0] > W*.7 ? 'end' : 'start'; g += `<circle class="dot${s.dotCls?' '+s.dotCls:''}" cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="5"/><text class="val" x="${(p[0] + (anchor==='end'?-9:9)).toFixed(1)}" y="${(p[1]-9).toFixed(1)}" text-anchor="${anchor}">${fmt0(v)}</text>`; }
   }
@@ -862,28 +1067,144 @@ function viewFix(){
   return h;
 }
 
-function viewSave(){
-  const all = S.tx.filter(t=>t.type==='save');
-  const total = all.reduce((s,t)=>s+t.amount,0);
-  const t=todayDate(), mr=rangeFor('month',t), m=totals(mr.start, mr.end), yr=rangeFor('year',t), y=totals(yr.start, yr.end);
-  const rate = m.inc>0 ? Math.round(m.sav/m.inc*100) : null;
-  let h = `<section class="hero"><div class="cap">Ersparnisse gesamt</div><div class="big2 sv">${fmt(total)}</div><p class="sub">Summe aller Sparbuchungen abzüglich Entnahmen.</p></section>`;
-  h += `<div class="panel" style="margin-top:14px"><div class="kpis"><div><span>Im ${MONTHS[t.getMonth()]}</span><b>${fmt(m.sav)}</b></div><div><span>Sparquote ${MONTHS[t.getMonth()]}</span><b>${rate==null?'–':rate+' %'}</b></div><div><span>Seit Jahresbeginn</span><b>${fmt(y.sav)}</b></div><div><span>Ø pro Monat ${t.getFullYear()}</span><b>${fmt(Math.round(y.sav/(t.getMonth()+1)))}</b></div></div></div>`;
-  h += `<div class="btn-row" style="margin-top:14px"><button class="btn solid" data-action="add" data-type="save">Sparbetrag buchen</button><button class="btn" data-action="rule-new" data-type="save">Sparplan anlegen</button></div>`;
-  if(!all.length){
-    h += `<div class="panel empty" style="margin-top:24px"><h3>Noch nichts gespart erfasst</h3><p>Verbuche hier, was du zurücklegst – zum Beispiel deinen monatlichen ETF-Sparplan oder den Notgroschen. Entnahmen trägst du genauso ein.</p></div>`;
-    return h;
+function accCard(r){
+  const a=r.a, st=r.s, etf=isEtf(a);
+  const meta = [etf ? 'ETF / Depot' : 'Tagesgeld / Konto', a.isin && etf ? a.isin : '', st.last ? `Stand ${dm(parse(st.last.date))}${st.pending ? ` + ${st.pending} Buchung${st.pending===1?'':'en'}` : ''}` : 'noch kein Stand eingetragen'].filter(Boolean).join(', ');
+  let h = `<div class="acc"><button class="acc-head" data-action="acc-edit" data-id="${esc(a.id)}"><span class="ic">${esc(a.icon)}</span><span class="m"><span class="c">${esc(a.name)}</span><span class="n">${esc(meta)}</span></span><span class="chev" aria-hidden="true">›</span></button>`;
+  h += `<div class="acc-val">${fmt(st.value)}</div>`;
+  if(etf){
+    if(st.last){
+      const g=st.gain;
+      h += `<div class="acc-grid"><div><span>Eingezahlt</span><b>${fmt(st.invested)}</b></div><div><span>${g>=0?'Gewinn':'Verlust'}</span><b class="${g>=0?'gain':'loss'}">${signed(g)}${st.gainPct!=null?` (${fmtPct(st.gainPct)})`:''}</b></div></div>`;
+      if(st.move) h += `<p class="acc-move ${st.move.abs>=0?'gain':'loss'}">Seit ${dm(parse(st.move.from))}: ${signed(st.move.abs)}${st.move.pct!=null?` (${fmtPct(st.move.pct)})`:''}</p>`;
+      if(st.last.price) h += `<p class="muted" style="margin:6px 0 0;font-size:14px">Kurs ${fmtPrice(st.last.price)}${st.last.pdate ? `, Schlusskurs vom ${dm(parse(st.last.pdate))}` : ''}${st.last.chg!=null ? `, Tagesveränderung <b class="${st.last.chg>=0?'gain':'loss'}">${fmtPct(st.last.chg, 2)}</b>` : ''}${st.last.shares ? `, ${esc(fmtNum(st.last.shares,4))} Anteile${st.last.auto?' (berechnet)':''}` : ''}</p>`;
+      if(st.snaps.length >= 2){
+        const sn = st.snaps.slice(-60), list=r.list;
+        const vals = sn.map(x=>x.value), inv = sn.map(x=>investedAt(a, x.date, list));
+        if(st.pending){ vals.push(st.value); inv.push(st.invested); }
+        const n=vals.length, xl=[{i:0,t:dm(parse(sn[0].date))},{i:n-1,t:st.pending?'heute':dm(parse(sn[sn.length-1].date))}];
+        h += `<div style="margin-top:8px">${svgLines(n,[{vals:inv, cls:'l-cmp'},{vals, cls:'l-sav', area:'a-sav', dot:true, dotCls:'sv'}],{xLabels:xl, aria:'Depotwert und Einzahlungen', fit:true})}<div class="chart-legend"><span><i class="k-bar" style="background:var(--save)"></i>Depotwert</span><span><i class="k-dash"></i>Eingezahlt</span></div></div>`;
+      }
+    } else {
+      h += `<p class="muted" style="margin:4px 0 0;font-size:14px">Bisher nur die Summe deiner Sparbuchungen. Trage den aktuellen Depotwert ein, dann siehst du Gewinn oder Verlust.</p>`;
+    }
   }
-  // Entwicklung 12 Monate
-  const vals=[], xl=[];
-  for(let k=11;k>=0;k--){ const end=new Date(t.getFullYear(), t.getMonth()-k+1, 0, 12); const e=iso(end); vals.push(all.filter(x=>x.date<=e).reduce((s,x)=>s+x.amount,0)); const i=11-k; if(i%3===0 || i===11) xl.push({i, t:`${MSHORT[end.getMonth()]}`}); }
-  h += `<section class="sec"><div class="sec-h"><h2>Entwicklung</h2><small>letzte 12 Monate</small></div><div class="panel">${svgLines(12,[{vals, cls:'l-sav', area:'a-sav', dot:true, dotCls:'sv'}],{xLabels:xl, aria:'Entwicklung der Ersparnisse'})}</div></section>`;
-  // Töpfe
-  const pots={}; for(const x of all) pots[x.cat]=(pots[x.cat]||0)+x.amount;
-  const rows=Object.entries(pots).sort((a,b)=>b[1]-a[1]); const top=Math.max(1,...rows.map(r=>r[1]));
-  h += `<section class="sec"><div class="sec-h"><h2>Spartöpfe</h2></div><ul class="list">` + rows.map(([id,v])=>{ const c=catOf('save',id); return `<li><button class="cat" data-action="cat-list" data-cat="${esc(id)}" data-type="save"><span class="ic">${esc(c.icon)}</span><span class="m"><span class="t"><span>${esc(c.name)}</span><b>${fmt(v)}</b></span><span class="b sv"><i style="width:${Math.max(0,v)/top*100}%"></i></span></span></button></li>`; }).join('') + `</ul></section>`;
-  h += `<section class="sec"><div class="sec-h"><h2>Letzte Sparbuchungen</h2></div>${all.slice(0,6).map(txRow).join('')}</section>`;
+  const qBtn = etf && quoteCfg().on ? `<button class="btn solid" data-action="quote" data-id="${esc(a.id)}">Kurs abrufen</button>` : '';
+  h += `<div class="btn-row" style="margin-top:12px">${qBtn}<button class="btn ${qBtn?'':'solid'}" data-action="acc-update" data-id="${esc(a.id)}">${qBtn ? 'Selbst eintragen' : 'Stand aktualisieren'}</button>${r.list.length?`<button class="btn" data-action="cat-list" data-cat="${esc(a.id)}" data-type="save">Buchungen</button>`:''}</div></div>`;
   return h;
+}
+function viewSave(){
+  const t=todayDate();
+  const all = S.tx.filter(x=>x.type==='save');
+  const rows = accounts().map(a=>{ const list=all.filter(x=>x.cat===a.id); return {a, list, s:accStats(a, list)}; });
+  const main = rows.filter(r=> r.s.value!==0 || r.s.snaps.length || r.list.length || (!r.a.hidden && (r.a.id==='tagesgeld' || isEtf(r.a))));
+  const rest = rows.filter(r=> !main.includes(r) && !r.a.hidden);
+  const total = main.reduce((x,r)=>x+r.s.value,0), etfSum = main.filter(r=>isEtf(r.a)).reduce((x,r)=>x+r.s.value,0);
+  let h = `<section class="hero"><div class="cap">Ersparnisse gesamt</div><div class="big2 sv">${fmt(total)}</div><p class="sub">Kontostände und Depotwerte, jeweils zum letzten eingetragenen Stand plus deine Sparbuchungen seitdem.</p></section>`;
+  h += `<div class="panel" style="margin-top:14px"><div class="kpis"><div><span>Tagesgeld &amp; Konten</span><b>${fmt(total-etfSum)}</b></div><div><span>ETF &amp; Depot</span><b>${fmt(etfSum)}</b></div></div></div>`;
+  h += `<section class="sec"><div class="sec-h"><h2>Deine Sparkonten</h2></div><div class="accs">${main.map(accCard).join('')}</div>`;
+  if(rest.length) h += `<p class="muted" style="margin:14px 0 6px;font-size:14px">Weitere Konten ohne Guthaben:</p><div class="chips">${rest.map(r=>`<button class="chip" data-action="acc-edit" data-id="${esc(r.a.id)}">${esc(r.a.icon)} ${esc(r.a.name)}</button>`).join('')}</div>`;
+  h += `<div class="btn-row" style="margin-top:16px"><button class="btn solid" data-action="add" data-type="save">Sparbetrag buchen</button><button class="btn" data-action="rule-new" data-type="save">Sparplan anlegen</button><button class="btn" data-action="acc-new">Konto hinzufügen</button></div></section>`;
+  // Monat & Jahr
+  const mr=rangeFor('month',t), m=totals(mr.start, mr.end), yr=rangeFor('year',t), y=totals(yr.start, yr.end);
+  const rate = m.inc>0 ? Math.round(m.sav/m.inc*100) : null;
+  h += `<section class="sec"><div class="sec-h"><h2>Sparleistung</h2></div><div class="panel"><div class="kpis"><div><span>Im ${MONTHS[t.getMonth()]}</span><b>${fmt(m.sav)}</b></div><div><span>Sparquote ${MONTHS[t.getMonth()]}</span><b>${rate==null?'–':rate+' %'}</b></div><div><span>Seit Jahresbeginn</span><b>${fmt(y.sav)}</b></div><div><span>Ø pro Monat ${t.getFullYear()}</span><b>${fmt(Math.round(y.sav/(t.getMonth()+1)))}</b></div></div></div></section>`;
+  // Entwicklung gesamt
+  if(main.some(r=>r.list.length || r.s.snaps.length)){
+    const vals=[], xl=[];
+    for(let k=11;k>=0;k--){ const end=new Date(t.getFullYear(), t.getMonth()-k+1, 0, 12); const e = k===0 ? todayIso() : iso(end); vals.push(main.reduce((x,r)=>x+valueAt(r.a, e, r.list),0)); const i=11-k; if(i%3===0 || i===11) xl.push({i, t:k===0?'heute':MSHORT[end.getMonth()]}); }
+    h += `<section class="sec"><div class="sec-h"><h2>Entwicklung</h2><small>letzte 12 Monate</small></div><div class="panel">${svgLines(12,[{vals, cls:'l-sav', area:'a-sav', dot:true, dotCls:'sv'}],{xLabels:xl, aria:'Entwicklung der Ersparnisse'})}</div></section>`;
+  }
+  if(all.length) h += `<section class="sec"><div class="sec-h"><h2>Letzte Sparbuchungen</h2></div>${all.slice(0,6).map(txRow).join('')}</section>`;
+  return h;
+}
+
+/* ---------- Sparkonto bearbeiten / Stand eintragen ---------- */
+function accFormHtml(){
+  const etf = F.kind==='etf', editing=!!F.id, a = editing ? accById(F.id) : null;
+  let h = `<div class="sheet-head"><h2>${editing ? 'Sparkonto' : 'Neues Sparkonto'}</h2><button class="icon-btn" data-action="close" aria-label="Schließen">${ICON.close}</button></div>`;
+  h += `<span class="flabel">Name</span><div class="row"><input id="acc-icon" class="inp emoji-inp" maxlength="8" value="${esc(F.icon)}" aria-label="Symbol"><input id="acc-name" class="inp" maxlength="30" placeholder="z. B. Tagesgeld" value="${esc(F.name)}" aria-label="Name"></div>`;
+  h += `<span class="flabel">Art</span>${seg('acc-kind', [['cash','Tagesgeld / Konto'],['etf','ETF / Depot']], F.kind)}`;
+  h += `<div id="acc-etf" ${etf?'':'hidden'}><label><span class="flabel">ISIN (optional)</span><input id="acc-isin" class="inp" maxlength="12" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="z. B. IE00…" value="${esc(F.isin)}"></label>`;
+  if(quoteCfg().on) h += `<span class="flabel">Börsenkürzel für den Kursabruf</span><div class="row"><input id="acc-symbol" class="inp" maxlength="20" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="z. B. SPYI.DEX" value="${esc(F.symbol)}"><button class="btn" data-action="acc-sym-search">Suchen</button></div><p class="muted" style="margin:6px 0 0;font-size:13.5px">XETRA-Kürzel enden auf .DEX. Kurse in Euro wählen.${F.cur ? ` Aktuell: ${esc(F.cur)}.` : ''}</p><div id="acc-sym-results"></div>`;
+  h += `</div>`;
+  h += `<h3 class="set-h">Aktueller Stand</h3>`;
+  h += `<label><span class="flabel">Stichtag</span><input id="acc-date" class="inp" type="date" max="${todayIso()}" value="${esc(F.date)}"></label>`;
+  h += `<span class="flabel" id="acc-value-label">${etf ? 'Depotwert' : 'Kontostand'}</span><label class="amount" style="margin-top:0"><input id="acc-value" inputmode="decimal" placeholder="0,00" autocomplete="off" aria-label="Betrag in Euro" value="${F.value!=null ? esc(amountIn(F.value)) : ''}"><span>€</span></label>`;
+  h += `<div id="acc-calc" ${etf?'':'hidden'}><span class="flabel">Oder ausrechnen lassen</span><div class="grid2"><label><span class="flabel" style="margin-top:0">Anteile</span><input id="acc-shares" class="inp" inputmode="decimal" autocomplete="off" value="${F.shares!=null && F.shares!=='' ? esc(String(F.shares).replace('.',',')) : ''}"></label><label><span class="flabel" style="margin-top:0">Kurs in €</span><input id="acc-price" class="inp" inputmode="decimal" autocomplete="off" placeholder="z. B. 11,71"></label></div></div>`;
+  h += `<div id="acc-inv" ${etf?'':'hidden'}><span class="flabel">Insgesamt eingezahlt</span><input id="acc-invested" class="inp" inputmode="decimal" autocomplete="off" placeholder="0,00" value="${F.invested!=null ? esc(amountIn(F.invested)) : ''}"><p class="muted" style="margin:6px 0 0;font-size:13.5px">Summe aller Käufe, ohne Kursgewinne. Steht in deiner Depot-App meist als „Einstandswert“.</p></div>`;
+  h += `<p class="hint">Neue Sparbuchungen auf dieses Konto rechnet die App automatisch dazu${etf?' – auch beim eingezahlten Betrag':''}. Den Stand musst du nur ab und zu aktualisieren.${etf && quoteCfg().on ? ' Für den Kursabruf reicht es, einmal die Anzahl deiner Anteile einzutragen; gleiche sie gelegentlich mit deiner Depot-App ab.' : ''}</p>`;
+  h += `<button class="primary" data-action="acc-save">Speichern</button>`;
+  if(a && (a.snaps||[]).length){
+    h += `<h3 class="set-h">Eingetragene Stände</h3>`;
+    for(const x of a.snaps.slice().reverse().slice(0,40)) h += `<div class="snap-row"><span>${dmy(parse(x.date))}</span><span>${fmt(x.value)}${x.shares ? ` <small class="muted">(${esc(fmtNum(x.shares,4))} Anteile${x.price ? ` × ${esc(fmtNum(x.price,4))} €` : ''}${x.auto ? ', Kursabruf' : ''})</small>` : ''}</span><button data-action="acc-snap-del" data-date="${esc(x.date)}" aria-label="Stand vom ${dmy(parse(x.date))} löschen">×</button></div>`;
+  }
+  if(a && a.id!==FALLBACK.save) h += `<button class="danger" data-action="acc-hide">${a.hidden ? 'Konto ist ausgeblendet – wieder einblenden' : 'Konto ausblenden'}</button>`;
+  return h;
+}
+function openAccForm(a, focus){
+  const st = a ? accStats(a) : null;
+  const sb = a ? sharesBase(a, todayIso()) : null;
+  F = {mode:'acc', id:a ? a.id : null, name:a ? a.name : '', icon:a ? a.icon : '🏦', kind:a ? (a.kind||'cash') : 'cash', isin:a && a.isin || '', symbol:a && a.symbol || '', cur:a && a.cur || '', date:todayIso(),
+       value: st ? st.value : null, invested: st ? st.invested : null, shares: sb ? sb.shares : '', dirtyV:false, dirtyI:false, dirtyS:false};
+  openSheet(accFormHtml(), 'save');
+  const id = focus==='shares' ? 'acc-shares' : focus==='symbol' ? 'acc-symbol' : focus ? 'acc-value' : null;
+  const el = id && $('#'+id);
+  if(el){ el.focus({preventScroll:true}); try{ el.select(); }catch(e){} el.scrollIntoView({block:'center'}); }
+}
+function saveAcc(){
+  if(!F || F.mode!=='acc') return;
+  const etf = F.kind==='etf';
+  const name = $('#acc-name').value.trim().slice(0,30) || (etf ? 'ETF-Depot' : 'Tagesgeld');
+  const icon = firstChars($('#acc-icon').value.trim(),2) || (etf ? '📈' : '🏦');
+  const isin = ($('#acc-isin') ? $('#acc-isin').value : '').toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,12);
+  if(etf && isin && !/^[A-Z]{2}[A-Z0-9]{9}\d$/.test(isin)){ toast('Die ISIN sieht nicht vollständig aus (12 Zeichen, z. B. IE00B3YLTY66).'); return; }
+  let date = $('#acc-date').value || todayIso(); if(date > todayIso()) date = todayIso();
+  let value=null, invested=null, shares=NaN, price=NaN;
+  if(F.dirtyV){
+    value = parseMoney($('#acc-value').value, true);
+    if(Number.isNaN(value)){ toast('Bitte einen gültigen Betrag eingeben, z. B. 8.240,00.'); $('#acc-value').focus(); return; }
+  }
+  if(etf){
+    const sTxt = $('#acc-shares').value.trim(), pTxt = $('#acc-price').value.trim();
+    if(F.dirtyS && sTxt){ shares = parseDecimal(sTxt); if(Number.isNaN(shares)){ toast('Bitte bei den Anteilen eine gültige Zahl eingeben, z. B. 1.024,5678.'); $('#acc-shares').focus(); return; } }
+    if(pTxt){ price = parseDecimal(pTxt); if(Number.isNaN(price)){ toast('Bitte beim Kurs eine gültige Zahl eingeben, z. B. 11,71.'); $('#acc-price').focus(); return; } }
+    if(shares>0 && value==null){
+      value = price>0 ? Math.round(shares*price*100) : F.value;
+      if(value==null){ toast('Bitte zusätzlich den Kurs oder den Depotwert eintragen.'); $('#acc-price').focus(); return; }
+    }
+  }
+  let symbol = '';
+  if(etf && $('#acc-symbol')){ symbol = cleanSymbol($('#acc-symbol').value); if($('#acc-symbol').value.trim() && !symbol){ toast('Das Börsenkürzel enthält ungültige Zeichen.'); return; } }
+  if(etf && F.dirtyI){
+    invested = parseMoney($('#acc-invested').value, true);
+    if(Number.isNaN(invested)){ toast('Bitte beim eingezahlten Betrag eine gültige Zahl eingeben.'); $('#acc-invested').focus(); return; }
+  }
+  const dup = accounts().find(x=>x.id!==F.id && !x.hidden && x.name.toLowerCase()===name.toLowerCase());
+  if(dup){ toast('Ein Konto mit diesem Namen gibt es schon.'); return; }
+  let a = F.id ? accById(F.id) : null;
+  if(!a){ a = {id:'k-'+newId().replace(/-/g,'').slice(0,10), name, icon, kind:F.kind, snaps:[]}; accounts().push(a); }
+  a.name=name; a.icon=icon; a.kind=F.kind;
+  if(etf && isin) a.isin=isin; else delete a.isin;
+  if(!etf){ delete a.base; delete a.symbol; delete a.cur; }
+  else if($('#acc-symbol')){
+    if(symbol){
+      const picked = !!F.cur && F.symbol===symbol;
+      if(picked) a.cur = F.cur; else if(symbol!==a.symbol) delete a.cur;
+      a.symbol = symbol;
+    } else { delete a.symbol; delete a.cur; }
+  }
+  const at = date===todayIso() ? Date.now() : endOfDayTs(date);
+  if(value!=null){
+    const sn={date, at, value};
+    if(etf && shares>0){ sn.shares=shares; if(price>0) sn.price=price; }
+    else if(etf){ const same=(a.snaps||[]).find(x=>x.date===date); if(same && same.shares>0) sn.shares=same.shares; }
+    a.snaps = (a.snaps||[]).filter(x=>x.date!==date); a.snaps.push(sn); a.snaps.sort((x,y)=>x.date<y.date?-1:x.date>y.date?1:0);
+  }
+  if(invested!=null) a.base = {date, at, invested};
+  const isNew = !F.id;
+  Store.saveSettings(); closeSheet(); render();
+  toast(isNew ? 'Sparkonto angelegt' : value!=null ? 'Stand gespeichert' : 'Gespeichert');
 }
 
 /* ---------- Eingabe-Sheet ---------- */
@@ -909,9 +1230,9 @@ function formHtml(){
   const title = isRule ? (editing ? 'Wiederkehrende Buchung' : 'Neue wiederkehrende Buchung') : (editing ? 'Buchung bearbeiten' : 'Neue Buchung');
   let h = `<div class="sheet-head"><h2>${title}</h2><button class="icon-btn" data-action="close" aria-label="Schließen">${ICON.close}</button></div>`;
   h += seg('f-type', [['expense','Ausgabe'],['income','Einnahme'],['save','Sparen']], F.type, 'type-seg');
-  h += `<label class="amount"><input id="f-amount" inputmode="decimal" enterkeyhint="done" placeholder="0,00" autocomplete="off" aria-label="Betrag in Euro" value="${F.amount?esc(amountStr(F.amount)):''}"><span>€</span></label>`;
+  h += `<label class="amount"><input id="f-amount" inputmode="decimal" enterkeyhint="done" placeholder="0,00" autocomplete="off" aria-label="Betrag in Euro" value="${F.amount?esc(amountIn(F.amount)):''}"><span>€</span></label>`;
   h += `<div id="f-dir" ${F.type==='save'?'':'hidden'} style="margin-top:12px">${seg('f-dir', [['in','Einzahlen'],['out','Entnehmen']], F.dir)}</div>`;
-  h += `<span class="flabel">Kategorie</span><div class="chips" id="f-cats">${catChips()}</div>`;
+  h += `<span class="flabel" id="f-cat-label">${F.type==='save' ? 'Konto' : 'Kategorie'}</span><div class="chips" id="f-cats">${catChips()}</div>`;
   if(isRule){
     h += `<div class="grid2"><label><span class="flabel">${editing?'Beginnt am':'Erste Fälligkeit'}</span><input id="f-date" class="inp" type="date" value="${esc(F.date)}"></label><label><span class="flabel">Rhythmus</span><select id="f-freq" class="inp">${Object.entries(FREQ).map(([k,v])=>`<option value="${k}" ${k===F.freq?'selected':''}>${v}</option>`).join('')}</select></label></div>`;
     h += `<label><span class="flabel">Endet am (optional)</span><input id="f-end" class="inp" type="date" value="${esc(F.end||'')}"></label>`;
@@ -955,7 +1276,7 @@ function readForm(){
   if($('#f-active')) F.active = $('#f-active').checked;
 }
 async function submitForm(){
-  if(!F) return;
+  if(!F || F.mode==='acc') return;
   readForm();
   if(!(F.amount>0)){ toast('Bitte einen gültigen Betrag eingeben, z. B. 12,50.'); $('#f-amount')?.focus(); return; }
   const amount = F.type==='save' && F.dir==='out' ? -F.amount : F.amount;
@@ -1017,7 +1338,8 @@ function backupText(){
 }
 function settingsHtml(){
   let h = `<div class="sheet-head"><h2>Einstellungen</h2><button class="icon-btn" data-action="close" aria-label="Schließen">${ICON.close}</button></div>`;
-  h += `<h3 class="set-h">Datenschutz</h3><p class="muted" style="margin:0">Deine Buchungen liegen ausschließlich auf diesem iPhone. Die App funktioniert ohne Internet und überträgt nichts – an niemanden.</p>`;
+  const qc = quoteCfg();
+  h += `<h3 class="set-h">Datenschutz</h3><p class="muted" style="margin:0">Deine Buchungen liegen ausschließlich auf diesem iPhone. Die App funktioniert ohne Internet und überträgt nichts – an niemanden.${qc.on ? ' Einzige Ausnahme: der von dir eingeschaltete Kursabruf, und nur wenn du ihn antippst.' : ''}</p>`;
   h += `<h3 class="set-h">Sicherung</h3><p class="muted" style="margin:0 0 12px">Löschst du das App-Symbol vom Home-Bildschirm, löscht das iPhone auch die Daten. Sichere sie deshalb regelmäßig: „Sicherung erstellen“ öffnet das Teilen-Menü, dort „In Dateien sichern“ wählen. ${esc(backupText())}</p>`;
   h += `<div class="btn-row"><button class="btn solid" data-action="backup">Sicherung erstellen</button><label class="btn" style="position:relative;overflow:hidden">Sicherung einlesen<input type="file" id="imp-file" style="position:absolute;inset:0;opacity:0;cursor:pointer"></label></div>`;
   h += `<details style="margin-top:10px"><summary class="muted" style="cursor:pointer">Sicherung als Text einfügen</summary><textarea id="imp-text" class="csv-out" placeholder="Inhalt der Sicherungsdatei hier einfügen"></textarea><button class="btn" style="margin-top:8px" data-action="imp-paste">Einlesen</button></details>`;
@@ -1025,12 +1347,16 @@ function settingsHtml(){
   if(Store.rescue){ const d=new Date(Store.rescue.at||Store.rescue.savedAt||0); h += `<div class="notice" style="margin-top:16px"><b>Notfall-Stand vorhanden</b><p>${esc(Store.rescue.reason||'Gesicherter Stand')} am ${dmy(d)} um ${pad(d.getHours())}:${pad(d.getMinutes())} Uhr, ${(Store.rescue.tx||[]).length} Buchungen.</p><div class="btn-row"><button class="btn" data-action="restore">Diesen Stand wiederherstellen</button><button class="btn" data-action="drop-rescue">Endgültig entfernen</button></div></div>`; }
   h += `<p class="muted" style="margin:14px 0 0;font-size:14px">Speicherstatus: ${Store.idbOk ? 'doppelt gesichert (zwei Speicherbereiche)' : 'einfach gesichert'}${Store.persisted ? ', vom System als dauerhaft markiert' : ''}.</p>`;
   h += `<h3 class="set-h">Kategorien</h3>`;
-  for(const [type,label] of [['expense','Ausgaben'],['income','Einnahmen'],['save','Spartöpfe']]){
+  for(const [type,label] of [['expense','Ausgaben'],['income','Einnahmen'],['save','Sparkonten']]){
     h += `<div class="set-type">${label}</div><div class="chips">${visibleCats(type).map(c=>`<span class="chip del">${esc(c.icon)} ${esc(c.name)}${c.id===FALLBACK[type]?'':`<button data-action="cat-del" data-type="${type}" data-id="${esc(c.id)}" aria-label="${esc(c.name)} entfernen">×</button>`}</span>`).join('')}</div>`;
     h += `<div class="row" style="margin-top:8px"><input class="inp emoji-inp" id="ce-${type}" maxlength="8" placeholder="🙂" aria-label="Symbol"><input class="inp" id="cn-${type}" maxlength="30" placeholder="Neue Kategorie" aria-label="Name der neuen Kategorie"><button class="btn" data-action="cat-add" data-type="${type}">Hinzufügen</button></div>`;
   }
+  h += `<h3 class="set-h">Kursabruf (optional)</h3><p class="muted" style="margin:0">Eingeschaltet erscheint im ETF-Konto der Knopf „Kurs abrufen“. Nur beim Antippen fragt die App bei Alpha Vantage (USA) den letzten Schlusskurs ab. Übertragen werden dabei deine IP-Adresse, das Börsenkürzel und dein Schlüssel – keine Beträge, keine Buchungen.</p>`;
+  h += `<div class="switch-row"><div><b>Kursabruf erlauben</b><small>${qc.on ? 'Eingeschaltet' : 'Ausgeschaltet'}</small></div><label class="switch"><input type="checkbox" id="q-on" ${qc.on?'checked':''}><span></span></label></div>`;
+  if(qc.on) h += `<span class="flabel">Dein kostenloser API-Schlüssel</span><div class="row"><input id="q-key" class="inp" maxlength="64" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Schlüssel einfügen" value="${esc(qc.key)}"><button class="btn" data-action="q-key-save">Speichern</button></div><p class="muted" style="margin:6px 0 0;font-size:13.5px">Kostenlos anfordern auf <a href="https://www.alphavantage.co/support/#api-key" target="_blank" rel="noopener noreferrer" style="color:var(--accent)">alphavantage.co</a>. Damit sind 25 Abrufe pro Tag möglich. Der Schlüssel bleibt auf diesem iPhone und steht nicht in deinen Sicherungen.</p>`;
   h += `<h3 class="set-h">Export für Excel</h3><p class="muted" style="margin:0 0 12px">Alle Buchungen als Tabelle (CSV, Semikolon getrennt).</p><button class="btn" data-action="export">Als CSV exportieren</button>`;
   h += `<h3 class="set-h">Alle Daten löschen</h3><p class="muted" style="margin:0 0 4px">Entfernt alle Buchungen, Fixkosten und Kategorien. Ein Notfall-Stand bleibt erhalten, bis du ihn oben endgültig entfernst.</p><button class="danger" style="text-align:left;padding-left:0" data-action="wipe">Alle Daten von diesem Gerät löschen</button>`;
+  h += `<p class="muted" style="margin:26px 0 0;font-size:13px">Haushaltsbuch, Version ${APP_VERSION}</p>`;
   return h;
 }
 function openSettings(){ F=null; openSheet(settingsHtml(), 'expense'); }
@@ -1078,7 +1404,7 @@ async function exportCsv(){
 }
 async function backup(){
   const now = new Date();
-  const data = JSON.stringify({app:'haushaltsbuch', version:1, exported:now.toISOString(), tx:S.tx, settings:S.settings});
+  const data = JSON.stringify({app:'haushaltsbuch', version:2, exported:now.toISOString(), tx:S.tx, settings:S.settings});
   const r = await offerFile(`haushaltsbuch-sicherung-${todayIso()}-${pad(now.getHours())}${pad(now.getMinutes())}.json`, data, 'Sicherung');
   if(r==='saved'){ S.meta.lastBackup = Date.now(); S.meta.changes = -1; Store.save(); if($('#out-box')) refreshSettings(); render(); toast('Sicherung erstellt'); }
 }
@@ -1093,7 +1419,18 @@ async function importData(text){
   const byId = new Map(S.tx.map(t=>[t.id,t])); let added=0;
   for(const t of tx){ if(!byId.has(t.id)){ byId.set(t.id, t); added++; } }
   S.tx = [...byId.values()]; sortTx();
-  for(const k of TYPES) for(const c of set.categories[k]) if(!S.settings.categories[k].some(x=>x.id===c.id)) S.settings.categories[k].push(c);
+  for(const k of TYPES) for(const c of set.categories[k]){
+    const loc = S.settings.categories[k].find(x=>x.id===c.id);
+    if(!loc){ S.settings.categories[k].push(c); continue; }
+    if(k!=='save') continue;
+    const empty = !(loc.snaps||[]).length && !loc.base;
+    if(empty){ loc.kind=c.kind; loc.name=c.name; loc.icon=c.icon; }
+    const have = new Set((loc.snaps||[]).map(x=>x.date));
+    const extra = (c.snaps||[]).filter(x=>!have.has(x.date));
+    if(extra.length) loc.snaps = [...(loc.snaps||[]), ...extra].sort((x,y)=>x.date<y.date?-1:x.date>y.date?1:0);
+    if(!loc.base && c.base) loc.base = c.base;
+    if(!loc.isin && c.isin) loc.isin = c.isin;
+  }
   let rules=0; for(const r of set.recurring) if(!S.settings.recurring.some(x=>x.id===r.id)){ S.settings.recurring.push(r); rules++; }
   if(!Store.save()) return;
   refreshSettings(); render(); runRecurring();
@@ -1103,6 +1440,7 @@ async function wipe(btn){
   if(!btn.classList.contains('armed')){ btn.classList.add('armed'); btn.style.paddingLeft=''; btn.style.textAlign=''; btn.textContent='Wirklich alles löschen? Tippe erneut.'; return; }
   await Store.snapshot('Vor dem Löschen aller Daten');
   S.tx = []; S.settings = defaultSettings(); S.meta = {lastBackup:0, changes:0};
+  try{ localStorage.removeItem(QKEY); }catch(e){}
   Store.save();
   closeSheet(); render(); toast('Alle Daten gelöscht – unter Einstellungen wiederherstellbar');
 }
@@ -1121,7 +1459,7 @@ let toastT=0, toastFn=null;
 function toast(msg, actionLabel, fn){
   const t=$('#toast'); t.textContent=msg; toastFn = fn || null;
   if(fn){ const b=document.createElement('button'); b.className='undo'; b.type='button'; b.textContent=actionLabel; b.dataset.action='toast-undo'; t.appendChild(b); }
-  t.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>{ t.classList.remove('show'); toastFn=null; const u=t.querySelector('.undo'); if(u) u.remove(); }, fn ? 6000 : 2600);
+  t.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>{ t.classList.remove('show'); toastFn=null; const u=t.querySelector('.undo'); if(u) u.remove(); }, fn ? 6000 : Math.min(9000, Math.max(2600, String(msg).length*60)));
 }
 
 /* ---------- Aktionen ---------- */
@@ -1155,6 +1493,7 @@ const A = {
     el.parentElement.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed', b===el));
     $('#f-cats').innerHTML = catChips();
     $('#f-dir').hidden = F.type!=='save';
+    const cl=$('#f-cat-label'); if(cl) cl.textContent = F.type==='save' ? 'Konto' : 'Kategorie';
     const n=$('#f-note'); if(n) n.placeholder = F.type==='expense'?'z. B. Wochenmarkt':F.type==='income'?'z. B. Oktober':'z. B. Sparplan';
   },
   'f-dir'(el){ F.dir = el.dataset.v; el.parentElement.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed', b===el)); },
@@ -1169,7 +1508,7 @@ const A = {
     const hit = S.settings.categories[type].find(c=>c.name.toLowerCase()===name.toLowerCase());
     if(hit && !hit.hidden){ toast('Diese Kategorie gibt es schon.'); return; }
     if(hit){ delete hit.hidden; hit.icon = icon; }
-    else S.settings.categories[type].push({id:'c-'+newId().replace(/-/g,'').slice(0,10), name, icon});
+    else S.settings.categories[type].push(type==='save' ? {id:'c-'+newId().replace(/-/g,'').slice(0,10), name, icon, kind:'cash', snaps:[]} : {id:'c-'+newId().replace(/-/g,'').slice(0,10), name, icon});
     Store.saveSettings(); refreshSettings(); render(); toast('Kategorie hinzugefügt');
   },
   async 'cat-del'(el){
@@ -1182,7 +1521,33 @@ const A = {
   'drop-rescue'(){ dropRescue(); },
   'toast-undo'(){ const fn=toastFn; toastFn=null; $('#toast').classList.remove('show'); if(fn) fn(); },
   'imp-paste'(){ const t=$('#imp-text'); if(t) importData(t.value); },
-  wipe(el){ wipe(el); }
+  wipe(el){ wipe(el); },
+  'acc-new'(){ openAccForm(null); },
+  'acc-edit'(el){ const a=accById(el.dataset.id); if(a) openAccForm(a); },
+  'acc-update'(el){ const a=accById(el.dataset.id); if(a) openAccForm(a, true); },
+  'acc-kind'(el){
+    F.kind = el.dataset.v; const etf = F.kind==='etf';
+    el.parentElement.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed', b===el));
+    $('#acc-etf').hidden = !etf; $('#acc-calc').hidden = !etf; $('#acc-inv').hidden = !etf;
+    $('#acc-value-label').textContent = etf ? 'Depotwert' : 'Kontostand';
+  },
+  'acc-save'(){ saveAcc(); },
+  quote(el){ const a=accById(el.dataset.id); if(a) fetchQuote(a, el); },
+  'acc-sym-search'(el){ searchSymbol(el); },
+  'acc-sym-pick'(el){ $('#acc-symbol').value = el.dataset.sym; F.symbol = el.dataset.sym; F.cur = el.dataset.cur || ''; $('#acc-sym-results').innerHTML = `<p class="muted" style="margin:8px 0 0;font-size:14px">Ausgewählt: <b>${esc(el.dataset.sym)}</b>${F.cur?` (${esc(F.cur)})`:''}. Zum Übernehmen unten speichern.</p>`; },
+  'q-key-save'(){ const k=$('#q-key').value.trim(); if(k && !/^[A-Za-z0-9]{6,64}$/.test(k)){ toast('Der Schlüssel sieht nicht richtig aus (nur Buchstaben und Ziffern).'); return; } setQuoteCfg({on:true, key:k}); refreshSettings(); render(); toast(k ? 'Schlüssel gespeichert' : 'Schlüssel entfernt'); },
+  'acc-snap-del'(el){
+    const a = F && accById(F.id); if(!a) return;
+    if(!el.classList.contains('armed')){ el.classList.add('armed'); el.textContent='Löschen?'; el.style.fontSize='14px'; el.style.color='var(--out)'; return; }
+    a.snaps = (a.snaps||[]).filter(x=>x.date!==el.dataset.date);
+    Store.saveSettings(); render(); openAccForm(a); toast('Stand gelöscht');
+  },
+  'acc-hide'(el){
+    const a = F && accById(F.id); if(!a) return;
+    if(!a.hidden && !el.classList.contains('armed')){ el.classList.add('armed'); el.textContent='Ausblenden? Buchungen bleiben erhalten.'; return; }
+    if(a.hidden) delete a.hidden; else a.hidden = true;
+    Store.saveSettings(); closeSheet(); render(); toast(a.hidden ? 'Konto ausgeblendet' : 'Konto wieder eingeblendet');
+  }
 };
 document.addEventListener('click', e=>{
   const el = e.target.closest('[data-action]'); if(!el) return;
@@ -1193,19 +1558,38 @@ $('#scrim').addEventListener('click', closeSheet);
 document.addEventListener('keydown', e=>{
   if(e.key==='Escape' && !$('#sheet').hidden) closeSheet();
   if(e.key==='Enter' && F && Store.ready && e.target && (e.target.id==='f-amount' || e.target.id==='f-note')){ e.preventDefault(); submitForm(); }
+  if(e.key==='Enter' && F && F.mode==='acc' && Store.ready && e.target && /^acc-/.test(e.target.id || '')){ e.preventDefault(); saveAcc(); }
 });
 document.addEventListener('input', e=>{
+  if(F && F.mode==='acc'){
+    const id=e.target.id;
+    if(id==='acc-value') F.dirtyV = true;
+    if(id==='acc-invested') F.dirtyI = true;
+    if(id==='acc-shares') F.dirtyS = true;
+    if(id==='acc-symbol') F.cur = '';
+    if(id==='acc-shares' || id==='acc-price'){
+      const sh=parseDecimal($('#acc-shares').value), pr=parseDecimal($('#acc-price').value);
+      if(sh>0 && pr>0){ $('#acc-value').value = amountIn(Math.round(sh*pr*100)); F.dirtyV = true; }
+    }
+  }
   if(e.target.id==='q'){ S.ui.f.q = e.target.value; S.ui.limit=150; const l=$('#txlist'); if(l) l.innerHTML = txListHtml(); }
 });
 document.addEventListener('change', e=>{
   if(e.target.id==='f-rec' && F){ F.rec = e.target.checked; $('#f-recopts').hidden = !F.rec; }
+  if(e.target.id==='q-on'){ const q=quoteCfg(); setQuoteCfg({on:e.target.checked, key:q.key}); refreshSettings(); render(); }
   if(e.target.id==='imp-file' && e.target.files && e.target.files[0]){
     const f = e.target.files[0]; e.target.value = '';
     if(f.size > 20*1024*1024){ toast('Die Datei ist zu groß für eine Sicherung.'); return; }
     const rd = new FileReader(); rd.onload = () => importData(rd.result); rd.onerror = () => toast('Die Datei konnte nicht gelesen werden.'); rd.readAsText(f);
   }
 });
-document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='visible'){ runRecurring(); render(); } });
+let shownToday = todayIso();
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState!=='visible') return;
+  const t = todayIso();
+  if(t !== shownToday){ if(inRange(rangeFor(S.ui.unit, S.ui.anchor), parse(shownToday))) S.ui.anchor = todayDate(); shownToday = t; }
+  runRecurring(); render();
+});
 if('serviceWorker' in navigator && window.isSecureContext && location.protocol!=='file:') navigator.serviceWorker.register('sw.js').catch(()=>{});
 
 Store.init();
