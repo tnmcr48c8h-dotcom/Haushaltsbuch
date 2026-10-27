@@ -155,6 +155,15 @@ select.inp{-webkit-appearance:none;appearance:none;padding-right:34px;background
 .chart .l-cash{fill:none;stroke:var(--save);stroke-width:2;stroke-linejoin:round}
 .chart .a-etf{fill:var(--etf-soft)}
 .chart .l-etf{fill:none;stroke:var(--etf);stroke-width:2.5;stroke-linejoin:round}
+.chart .dot.etf{fill:var(--etf)}
+.dev-h{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:6px}
+.dev-h span{display:flex;align-items:center;gap:7px;font-weight:700}
+.dev-h span i{width:10px;height:10px;border-radius:3px}
+.dev-h b{font:700 18px var(--f-display);font-variant-numeric:tabular-nums}
+.acc-next{margin:8px 0 0;font-size:14px;color:var(--muted)}
+.lnk-row{display:flex;flex-wrap:wrap;gap:4px 18px;margin-top:8px}
+.lnk{border:0;background:none;padding:6px 0;color:var(--accent);font-weight:700;font-size:14.5px}
+.tx.planned .c .tag{margin-left:4px}
 .chart .l-inc{fill:none;stroke:var(--in);stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round}
 .chart .dot.in{fill:var(--in)}
 .chart-legend .lv{color:var(--ink);font-variant-numeric:tabular-nums}
@@ -288,6 +297,9 @@ select.inp{-webkit-appearance:none;appearance:none;padding-right:34px;background
 
 .sync{white-space:nowrap}
 .accs{display:flex;flex-direction:column;gap:12px}
+.acc.acc-cash{border-left:4px solid var(--save)}
+.acc.acc-etf{border-left:4px solid var(--etf)}
+.acc.acc-etf .acc-val{color:var(--etf)}
 .acc{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:12px 14px 14px}
 .acc-head{display:flex;align-items:center;gap:12px;width:100%;padding:0;border:0;background:none;text-align:left}
 .acc-head .m{flex:1;min-width:0;display:flex;flex-direction:column}
@@ -366,7 +378,7 @@ details summary{font-size:14.5px}
 
 <script>
 'use strict';
-const APP_VERSION = '1.6';
+const APP_VERSION = '1.7';
 /* ---------- Helfer ---------- */
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -433,7 +445,7 @@ const FREQ = {weekly:'wöchentlich', monthly:'monatlich', quarterly:'vierteljäh
 const FREQ_FACTOR = {weekly:52/12, monthly:1, quarterly:1/3, halfyearly:1/6, yearly:1/12};
 const DYN_OPTS = [0.02, 0.03, 0.05];
 
-function defaultSettings(){ const c={}; for(const k in DEFAULT_CATS) c[k]=DEFAULT_CATS[k].map(([id,name,icon])=>k==='save' ? {id,name,icon,kind:id==='etf'?'etf':'cash',snaps:[]} : {id,name,icon}); return {v:2, categories:c, recurring:[]}; }
+function defaultSettings(){ const c={}; for(const k in DEFAULT_CATS) c[k]=DEFAULT_CATS[k].map(([id,name,icon])=>k==='save' ? {id,name,icon,kind:id==='etf'?'etf':'cash',snaps:[]} : {id,name,icon}); return {v:2, categories:c, recurring:[], workday:true}; }
 const TYPES = ['expense','income','save'];
 const isDate = v => typeof v==='string' && /^\d{4}-\d{2}-\d{2}$/.test(v) && iso(parse(v))===v;
 const str = (v,n) => String(v==null ? '' : v).slice(0,n);
@@ -489,7 +501,7 @@ function cleanAcc(c, id){
   return o;
 }
 function normalizeSettings(d){
-  const def = defaultSettings(), out = {v:2, categories:{}, recurring:[]};
+  const def = defaultSettings(), out = {v:2, categories:{}, recurring:[], workday: !(d && d.workday===false)};
   const src = (d && typeof d==='object') ? d : {};
   for(const k of TYPES){
     const list = src.categories && Array.isArray(src.categories[k]) ? src.categories[k] : def.categories[k];
@@ -607,25 +619,46 @@ function nth(rule,n){
     default: return addMonths(s, n);
   }
 }
-function occurrences(rule, afterIso, uptoIso){
-  const out=[];
+// Ostersonntag (Gauß/Meeus) und gesetzliche Feiertage in Baden-Württemberg
+function easterSunday(y){
+  const a=y%19, b=Math.floor(y/100), c=y%100, d=Math.floor(b/4), e=b%4, f=Math.floor((b+8)/25), g=Math.floor((b-f+1)/3), h=(19*a+b-d-g+15)%30, i=Math.floor(c/4), k=c%4, l=(32+2*e+2*i-h-k)%7, m=Math.floor((a+11*h+22*l)/451);
+  return new Date(y, Math.floor((h+l-7*m+114)/31)-1, ((h+l-7*m+114)%31)+1, 12);
+}
+const holCache = {};
+function holidaysBW(y){
+  if(holCache[y]) return holCache[y];
+  const set = new Map([['01-01','Neujahr'],['01-06','Heilige Drei Könige'],['05-01','Tag der Arbeit'],['10-03','Tag der Deutschen Einheit'],['11-01','Allerheiligen'],['12-25','1. Weihnachtstag'],['12-26','2. Weihnachtstag']].map(([k,v])=>[`${y}-${k}`, v]));
+  const e = easterSunday(y);
+  for(const [off,name] of [[-2,'Karfreitag'],[1,'Ostermontag'],[39,'Christi Himmelfahrt'],[50,'Pfingstmontag'],[60,'Fronleichnam']]) set.set(iso(addDays(e,off)), name);
+  return holCache[y] = set;
+}
+const isWorkday = d => { const x=parse(d), wd=x.getDay(); return wd!==0 && wd!==6 && !holidaysBW(x.getFullYear()).has(d); };
+function toWorkday(d){ let x=d; for(let i=0; i<10 && !isWorkday(x); i++) x = iso(addDays(parse(x),1)); return x; }
+const shiftOn = () => S.settings.workday !== false;
+// Fälligkeiten: nom = Plantermin, d = tatsächlicher Buchungstag (ggf. nächster Arbeitstag)
+function occurrencesN(rule, afterIso, uptoIso){
+  const out=[], sh=shiftOn();
   for(let n=0; n<2000; n++){
-    const d = iso(nth(rule,n));
-    if(d > uptoIso) break;
-    if(rule.end && d > rule.end) break;
-    if(d > afterIso) out.push(d);
+    const nom = iso(nth(rule,n));
+    if(nom > uptoIso) break;
+    if(rule.end && nom > rule.end) break;
+    const d = sh ? toWorkday(nom) : nom;
+    if(d > afterIso && d <= uptoIso) out.push({d, nom});
   }
   return out;
 }
-function nextDue(rule){
-  const t = todayIso();
+const occurrences = (rule, a, u) => occurrencesN(rule, a, u).map(o=>o.d);
+function nextDueN(rule){
+  const t = todayIso(), sh=shiftOn();
   for(let n=0; n<2000; n++){
-    const d = iso(nth(rule,n));
-    if(rule.end && d > rule.end) return null;
-    if(d > t) return d;
+    const nom = iso(nth(rule,n));
+    if(rule.end && nom > rule.end) return null;
+    const d = sh ? toWorkday(nom) : nom;
+    if(d > t) return {d, nom};
   }
   return null;
 }
+const nextDue = rule => { const o=nextDueN(rule); return o ? o.d : null; };
 let recurringBusy = false;
 async function runRecurring(){
   if(!Store.ready || recurringBusy || !S.settings.recurring.length) return;
@@ -636,9 +669,10 @@ async function runRecurring(){
       if(!r.active) continue;
       const after = r.until || iso(addDays(parse(r.start),-1));
       if(after >= t) continue;
-      for(const d of occurrences(r, after, t)){
-        const id = `r-${r.id}-${d}`;
-        if(!have.has(id)) add.push({id, type:r.type, amount:amountAt(r, d), cat:r.cat, note:r.note||'', date:d, recurringId:r.id, created:Date.now()});
+      for(const o of occurrencesN(r, after, t)){
+        const id = `r-${r.id}-${o.d}`;
+        // auch unter dem Plantermin bereits gebuchte Raten erkennen (vor Einführung der Arbeitstag-Regel)
+        if(!have.has(id) && !have.has(`r-${r.id}-${o.nom}`)) add.push({id, type:r.type, amount:amountAt(r, o.nom), cat:r.cat, note:r.note||'', date:o.d, recurringId:r.id, created:Date.now()});
       }
       r.until = t; changed = true;
     }
@@ -654,7 +688,7 @@ function dynYears(r, d){
   return Math.max(0, (b.getFullYear()-a.getFullYear())*12 + (b.getMonth()-a.getMonth())) / 12;
 }
 function amountAt(r, d){ return r.dyn ? Math.round(r.amount * Math.pow(1 + r.dyn, dynYears(r, d))) : r.amount; }
-const currentAmount = r => amountAt(r, nextDue(r) || todayIso());
+const currentAmount = r => { const o=nextDueN(r); return amountAt(r, o ? o.nom : todayIso()); };
 const monthlyEq = r => Math.round(currentAmount(r) * (FREQ_FACTOR[r.freq]||1));
 const dynLabel = x => `+${String(Math.round(x*100))} % p. a.`;
 
@@ -882,7 +916,7 @@ function monthIncome(y, m){
   if(end > today) for(const r of S.settings.recurring){
     if(!r.active || r.type!=='income') continue;
     const from = [today, r.until||'', iso(new Date(y, m, 0, 12))].sort().pop();
-    for(const d of occurrences(r, from, end)) planned += amountAt(r, d);
+    for(const o of occurrencesN(r, from, end)) planned += amountAt(r, o.nom);
   }
   const res = {v: v+planned, planned}; incCache.set(k, res); return res;
 }
@@ -1122,9 +1156,27 @@ function viewHome(){
   return h;
 }
 
+// Geplante Buchungen: künftige Termine aus Fixkosten + Buchungen mit Datum in der Zukunft
+function plannedItems(days, filter){
+  const t = todayIso(), upto = iso(addDays(todayDate(), days)), out = [];
+  for(const r of S.settings.recurring){
+    if(!r.active) continue;
+    for(const o of occurrencesN(r, [t, r.until||''].sort().pop(), upto)) out.push({kind:'rule', id:r.id, date:o.d, nom:o.nom, type:r.type, cat:r.cat, note:r.note, amount:amountAt(r, o.nom), freq:r.freq, dyn:r.dyn});
+  }
+  for(const x of S.tx) if(x.date > t && x.date <= upto) out.push({kind:'tx', id:x.id, date:x.date, type:x.type, cat:x.cat, note:x.note, amount:x.amount});
+  return out.filter(filter || (()=>true)).sort((a,b)=> a.date<b.date ? -1 : a.date>b.date ? 1 : 0);
+}
+function plannedRow(p){
+  const c = catOf(p.type, p.cat), d = parse(p.date);
+  const when = `${WD[d.getDay()]} ${dm(d)}`;
+  const meta = [when, p.note, p.kind==='rule' ? `↻ ${FREQ[p.freq]}` : 'einmalig', p.nom && p.nom!==p.date ? `verschoben vom ${dm(parse(p.nom))}` : ''].filter(Boolean).join(', ');
+  const cls = p.type==='expense' ? 'out' : p.type==='income' ? 'in' : 'sv';
+  const amt = p.type==='expense' ? MINUS+fmt(p.amount) : p.type==='income' ? '+'+fmt(p.amount) : signed(p.amount);
+  return `<button class="tx planned" data-action="${p.kind==='rule'?'edit-rule':'edit-tx'}" data-id="${esc(p.id)}"><span class="ic">${esc(c.icon)}</span><span class="m"><span class="c">${esc(c.name)} <span class="tag">geplant</span></span><span class="n">${esc(meta)}</span></span><span class="amt ${cls}">${amt}</span></button>`;
+}
 function txRow(t){
   const c=catOf(t.type,t.cat), rule = t.recurringId ? S.settings.recurring.find(r=>r.id===t.recurringId) : null;
-  const meta = [t.note, rule ? `↻ ${FREQ[rule.freq]||'wiederkehrend'}` : '', t.type==='save' ? (t.amount<0?'Entnahme':'Sparen') : ''].filter(Boolean).join(', ');
+  const meta = [t.date > todayIso() ? 'geplant' : '', t.note, rule ? `↻ ${FREQ[rule.freq]||'wiederkehrend'}` : '', t.type==='save' ? (t.amount<0?'Entnahme':'Sparen') : ''].filter(Boolean).join(', ');
   const cls = t.type==='expense' ? 'out' : t.type==='income' ? 'in' : 'sv';
   const amt = t.type==='expense' ? MINUS+fmt(t.amount) : t.type==='income' ? '+'+fmt(t.amount) : signed(t.amount);
   return `<button class="tx" data-action="edit-tx" data-id="${esc(t.id)}"><span class="ic">${esc(c.icon)}</span><span class="m"><span class="c">${esc(c.name)}</span>${meta?`<span class="n">${esc(meta)}</span>`:''}</span><span class="amt ${cls}">${amt}</span></button>`;
@@ -1153,6 +1205,15 @@ function viewList(){
   return h;
 }
 function txListHtml(){
+  const f = S.ui.f, plainView = !f.cat && !f.range && !f.q.trim();
+  let pre = '';
+  if(plainView){
+    const pl = plannedItems(31, p => p.kind==='rule' && (f.type==='all' || p.type===f.type));
+    if(pl.length) pre = `<div class="mhead"><h3>Geplant</h3><small>aus Fixkosten, nächste 31 Tage</small></div>` + pl.map(plannedRow).join('');
+  }
+  return pre + txListBody();
+}
+function txListBody(){
   const list = filteredTx();
   if(!S.tx.length) return `<div class="panel empty" style="margin-top:20px"><h3>Noch keine Buchungen</h3><p>Alles, was du erfasst, erscheint hier nach Tagen sortiert.</p><button class="btn solid" data-action="add">Buchung erfassen</button></div>`;
   if(!list.length) return `<p class="muted" style="margin-top:22px">Keine Buchungen für diese Auswahl.</p>`;
@@ -1177,7 +1238,7 @@ function viewFix(){
   h += `<div class="panel" style="margin-top:14px"><div class="kpis"><div><span>Feste Einnahmen</span><b>${fmt(i)}</b></div><div><span>Sparpläne</span><b>${fmt(s)}</b></div><div><span>Bleibt monatlich</span><b style="color:${left<0?'var(--out)':'var(--in)'}">${left<0?MINUS:''}${fmt(Math.abs(left))}</b></div><div><span>Fixkosten im Jahr</span><b>${fmt0(e*12)}</b></div></div></div>`;
   // Noch fällig diesen Monat
   const t=todayDate(), eom=iso(new Date(t.getFullYear(), t.getMonth()+1, 0, 12));
-  let due=0, dueN=0; for(const r of act){ if(r.type!=='expense') continue; for(const d of occurrences(r, todayIso(), eom)){ due+=amountAt(r, d); dueN++; } }
+  let due=0, dueN=0; for(const r of act){ if(r.type!=='expense') continue; for(const o of occurrencesN(r, [todayIso(), r.until||''].sort().pop(), eom)){ due+=amountAt(r, o.nom); dueN++; } }
   if(dueN) h += `<p class="sub" style="margin-top:12px">Bis Monatsende werden noch ${dueN===1?'1 Zahlung':`${dueN} Zahlungen`} über ${fmt(due)} fällig.</p>`;
   h += `<section class="sec"><div class="sec-h"><h2>Wiederkehrende Buchungen</h2></div>`;
   if(!rules.length){
@@ -1203,7 +1264,7 @@ function viewFix(){
 function accCard(r){
   const a=r.a, st=r.s, etf=isEtf(a);
   const meta = [etf ? 'ETF / Depot' : 'Tagesgeld / Konto', a.isin && etf ? a.isin : '', st.last ? `Stand ${dm(parse(st.last.date))}${st.pending ? ` + ${st.pending} Buchung${st.pending===1?'':'en'}` : ''}` : 'noch kein Stand eingetragen'].filter(Boolean).join(', ');
-  let h = `<div class="acc"><button class="acc-head" data-action="acc-edit" data-id="${esc(a.id)}"><span class="ic">${esc(a.icon)}</span><span class="m"><span class="c">${esc(a.name)}</span><span class="n">${esc(meta)}</span></span><span class="chev" aria-hidden="true">›</span></button>`;
+  let h = `<div class="acc ${etf ? 'acc-etf' : 'acc-cash'}"><button class="acc-head" data-action="acc-edit" data-id="${esc(a.id)}"><span class="ic">${esc(a.icon)}</span><span class="m"><span class="c">${esc(a.name)}</span><span class="n">${esc(meta)}</span></span><span class="chev" aria-hidden="true">›</span></button>`;
   h += `<div class="acc-val">${fmt(st.value)}</div>`;
   if(etf){
     if(st.last){
@@ -1222,15 +1283,18 @@ function accCard(r){
         const vals = sn.map(x=>x.value), inv = sn.map(x=>investedAt(a, x.date, list));
         if(st.pending){ vals.push(st.value); inv.push(st.invested); }
         const n=vals.length, xl=[{i:0,t:dm(parse(sn[0].date))},{i:n-1,t:st.pending?'heute':dm(parse(sn[sn.length-1].date))}];
-        const series = a.base ? [{vals:inv, cls:'l-cmp'},{vals, cls:'l-sav', area:'a-sav', dot:true, dotCls:'sv'}] : [{vals, cls:'l-sav', area:'a-sav', dot:true, dotCls:'sv'}];
-        h += `<div style="margin-top:8px">${svgLines(n, series, {xLabels:xl, aria:'Depotwert und Einzahlungen', fit:true})}<div class="chart-legend"><span><i class="k-bar" style="background:var(--save)"></i>Depotwert</span>${a.base?'<span><i class="k-dash"></i>Eingezahlt</span>':''}</div></div>`;
+        const series = a.base ? [{vals:inv, cls:'l-cmp'},{vals, cls:'l-etf', area:'a-etf', dot:true, dotCls:'etf'}] : [{vals, cls:'l-etf', area:'a-etf', dot:true, dotCls:'etf'}];
+        h += `<div style="margin-top:8px">${svgLines(n, series, {xLabels:xl, aria:'Depotwert und Einzahlungen', fit:true})}<div class="chart-legend"><span><i class="k-bar" style="background:var(--etf)"></i>Depotwert</span>${a.base?'<span><i class="k-dash"></i>Eingezahlt</span>':''}</div></div>`;
       }
     } else {
       h += `<p class="muted" style="margin:4px 0 0;font-size:14px">Bisher nur die Summe deiner Sparbuchungen. Trage den aktuellen Depotwert ein, dann siehst du Gewinn oder Verlust.</p>`;
     }
   }
-  const qBtn = etf && quoteCfg().on ? `<button class="btn solid" data-action="quote" data-id="${esc(a.id)}">Kurs abrufen</button>` : '';
-  h += `<div class="btn-row" style="margin-top:12px">${qBtn}<button class="btn ${qBtn?'':'solid'}" data-action="acc-update" data-id="${esc(a.id)}">${qBtn ? 'Selbst eintragen' : 'Stand aktualisieren'}</button>${r.list.length?`<button class="btn" data-action="cat-list" data-cat="${esc(a.id)}" data-type="save">Buchungen</button>`:''}</div></div>`;
+  const next = plannedItems(62, p => p.type==='save' && p.cat===a.id)[0];
+  if(next) h += `<p class="acc-next">Nächste Rate: <b>${signed(next.amount)}</b> am ${WD[parse(next.date).getDay()]} ${dm(parse(next.date))}${next.kind==='rule' && next.dyn ? ` (↗ ${dynLabel(next.dyn)})` : ''}</p>`;
+  const quoteOn = etf && quoteCfg().on;
+  h += `<div class="btn-row" style="margin-top:12px"><button class="btn solid" data-action="add" data-type="save" data-cat="${esc(a.id)}">Einzahlung</button>${etf ? `<button class="btn" data-action="rule-new" data-type="save" data-cat="${esc(a.id)}">Sparplan</button>` : ''}${quoteOn ? `<button class="btn" data-action="quote" data-id="${esc(a.id)}">Kurs abrufen</button>` : `<button class="btn" data-action="acc-update" data-id="${esc(a.id)}">Stand aktualisieren</button>`}</div>`;
+  h += `<div class="lnk-row">${quoteOn ? `<button class="lnk" data-action="acc-update" data-id="${esc(a.id)}">Stand selbst eintragen</button>` : ''}${r.list.length?`<button class="lnk" data-action="cat-list" data-cat="${esc(a.id)}" data-type="save">Alle Buchungen</button>`:''}</div></div>`;
   return h;
 }
 function viewSave(){
@@ -1244,7 +1308,9 @@ function viewSave(){
   h += `<div class="panel" style="margin-top:14px"><div class="kpis"><div><span>Tagesgeld &amp; Konten</span><b>${fmt(total-etfSum)}</b></div><div><span>ETF &amp; Depot</span><b>${fmt(etfSum)}</b></div></div></div>`;
   h += `<section class="sec"><div class="sec-h"><h2>Deine Sparkonten</h2></div><div class="accs">${main.map(accCard).join('')}</div>`;
   if(rest.length) h += `<p class="muted" style="margin:14px 0 6px;font-size:14px">Weitere Konten ohne Guthaben:</p><div class="chips">${rest.map(r=>`<button class="chip" data-action="acc-edit" data-id="${esc(r.a.id)}">${esc(r.a.icon)} ${esc(r.a.name)}</button>`).join('')}</div>`;
-  h += `<div class="btn-row" style="margin-top:16px"><button class="btn solid" data-action="add" data-type="save">Sparbetrag buchen</button><button class="btn" data-action="rule-new" data-type="save">Sparplan anlegen</button><button class="btn" data-action="acc-new">Konto hinzufügen</button></div></section>`;
+  h += `<div class="btn-row" style="margin-top:16px"><button class="btn" data-action="acc-new">Konto hinzufügen</button></div></section>`;
+  const pl = plannedItems(62, p => p.type==='save');
+  if(pl.length) h += `<section class="sec"><div class="sec-h"><h2>Geplant</h2><small>nächste 2 Monate</small></div>${pl.map(plannedRow).join('')}</section>`;
   // Monat & Jahr
   const mr=rangeFor('month',t), m=totals(mr.start, mr.end), yr=rangeFor('year',t), y=totals(yr.start, yr.end);
   const rate = m.inc>0 ? Math.round(m.sav/m.inc*100) : null;
@@ -1259,15 +1325,17 @@ function viewSave(){
     if(span <= 45){ for(let i=0;i<=span;i++) pts.push(iso(addDays(parse(start), i))); }
     else { let m = new Date(parse(start).getFullYear(), parse(start).getMonth()+1, 0, 12); while(iso(m) < ti){ pts.push(iso(m)); m = new Date(m.getFullYear(), m.getMonth()+2, 0, 12); } pts.push(ti); }
     if(pts.length >= 2){
-      const cash=[], etf=[];
-      for(const d of pts){ let c=0, f=0; for(const r of main){ const v=Math.max(0, chartValueAt(r.a, d, r.list)); if(isEtf(r.a)) f+=v; else c+=v; } cash.push(c); etf.push(f); }
+      const cash=[], etf=[], inv=[]; const etfRows = main.filter(r=>isEtf(r.a)), invKnown = etfRows.length && etfRows.every(r=>r.a.base);
+      for(const d of pts){ let c=0, f=0, iv=0; for(const r of main){ const v=Math.max(0, chartValueAt(r.a, d, r.list)); if(isEtf(r.a)){ f+=v; if(invKnown) iv+=investedAt(r.a, d, r.list); } else c+=v; } cash.push(c); etf.push(f); inv.push(invKnown && pts.length && d >= etfRows.map(r=>r.a.base.date).sort()[0] ? iv : null); }
       const n = pts.length;
       if(span <= 45){ xl.push({i:0, t:dm(parse(pts[0]))}); if(n>6) xl.push({i:Math.floor((n-1)/2), t:dm(parse(pts[Math.floor((n-1)/2)]))}); xl.push({i:n-1, t:'heute'}); }
       else { pts.forEach((d,i)=>{ if(i===n-1) xl.push({i, t:'heute'}); else if((n-1-i)%3===0 && i < n-2) xl.push({i, t:MSHORT[parse(d).getMonth()]}); }); }
       const lc=cash[n-1], lf=etf[n-1];
-      h += `<section class="sec"><div class="sec-h"><h2>Entwicklung</h2><small>aufsummiert, seit ${dm(parse(pts[0]))}${parse(pts[0]).getFullYear()!==t.getFullYear() ? parse(pts[0]).getFullYear() : ''}</small></div><div class="panel">${svgStack(n,[{vals:cash, area:'a-cash', line:'l-cash'},{vals:etf, area:'a-etf', line:'l-etf'}],{xLabels:xl, aria:'Ersparnisse nach Tagesgeld und ETF, aufsummiert'})}
-        <div class="chart-legend"><span><i class="k-bar" style="background:var(--save)"></i>Tagesgeld &amp; Konten <b class="lv">${fmt0(lc)}</b></span><span><i class="k-bar" style="background:var(--etf)"></i>ETF &amp; Depot <b class="lv">${fmt0(lf)}</b></span></div>
-        <p class="flow-diff">Gesamt ${fmt0(lc+lf)}${lc+lf>0 ? `, davon ${Math.round(lf/(lc+lf)*100)} % im ETF` : ''}.</p></div></section>`;
+      const since = `seit ${dm(parse(pts[0]))}${parse(pts[0]).getFullYear()!==t.getFullYear() ? parse(pts[0]).getFullYear() : ''}`;
+      h += `<section class="sec"><div class="sec-h"><h2>Entwicklung</h2><small>${since}</small></div>`;
+      h += `<div class="panel dev"><div class="dev-h"><span><i class="k-bar" style="background:var(--save)"></i>Tagesgeld &amp; Konten</span><b>${fmt(lc)}</b></div>${svgLines(n,[{vals:cash, cls:'l-cash', area:'a-cash', dot:true, dotCls:'sv', noLabel:true}],{xLabels:xl, aria:'Tagesgeld und Konten im Zeitverlauf'})}</div>`;
+      h += `<div class="panel dev" style="margin-top:12px"><div class="dev-h"><span><i class="k-bar" style="background:var(--etf)"></i>ETF &amp; Depot</span><b>${fmt(lf)}</b></div>${svgLines(n,[...(invKnown ? [{vals:inv, cls:'l-cmp'}] : []),{vals:etf, cls:'l-etf', area:'a-etf', dot:true, dotCls:'etf', noLabel:true}],{xLabels:xl, aria:'ETF und Depot im Zeitverlauf'})}${invKnown ? '<div class="chart-legend"><span><i class="k-bar" style="background:var(--etf)"></i>Depotwert</span><span><i class="k-dash"></i>Eingezahlt</span></div>' : ''}</div>`;
+      h += `<p class="flow-diff">Gesamt ${fmt0(lc+lf)}${lc+lf>0 ? `, davon ${Math.round(lf/(lc+lf)*100)} % im ETF und ${100-Math.round(lf/(lc+lf)*100)} % auf Tagesgeld & Konten` : ''}.</p></section>`;
     } else {
       h += `<section class="sec"><div class="sec-h"><h2>Entwicklung</h2></div><p class="muted" style="margin:0">Der Verlauf erscheint ab morgen und wächst mit jedem Tag.</p></section>`;
     }
@@ -1415,7 +1483,7 @@ function formHtml(){
   h += `<label><span class="flabel">Notiz (optional)</span><input id="f-note" class="inp" maxlength="120" placeholder="${F.type==='expense'?'z. B. Wochenmarkt':F.type==='income'?'z. B. Oktober':'z. B. Sparplan'}" value="${esc(F.note)}"></label>`;
   if(isRule){
     if(editing) h += `<div class="switch-row"><div><b>Aktiv</b><small>Pausierte Buchungen werden nicht automatisch erfasst.</small></div><label class="switch"><input type="checkbox" id="f-active" ${F.active?'checked':''}><span></span></label></div>`;
-    else h += `<p class="hint">Die App bucht den Betrag ab dem ersten Fälligkeitstag automatisch. Liegt der Beginn in der Vergangenheit, werden die bisherigen Termine nachgetragen.</p>`;
+    else h += `<p class="hint">Die App bucht den Betrag ab dem ersten Fälligkeitstag automatisch. Liegt der Beginn in der Vergangenheit, werden die bisherigen Termine nachgetragen.${shiftOn() ? ' Fällt ein Termin auf ein Wochenende oder einen Feiertag in Baden-Württemberg, wird am nächsten Arbeitstag gebucht.' : ''}</p>`;
   } else if(F.recurringId){
     h += `<p class="hint">Diese Buchung gehört zu einer wiederkehrenden Buchung. Änderungen gelten nur für diesen Eintrag. <button data-action="edit-rule" data-id="${esc(F.recurringId)}">Wiederkehrende Buchung ändern</button></p>`;
   } else {
@@ -1442,13 +1510,13 @@ function keypad(k){
 function openTxForm(tx, preset={}){
   const ruleExists = tx && tx.recurringId && S.settings.recurring.some(r=>r.id===tx.recurringId);
   F = tx ? {mode:'tx', quick:false, id:tx.id, type:tx.type, amount:Math.abs(tx.amount), dir:tx.amount<0?'out':'in', cat:tx.cat, date:tx.date, note:tx.note||'', recurringId:ruleExists ? tx.recurringId : null, rec:false, freq:'monthly', end:'', created:tx.created}
-         : {mode:'tx', quick:!!preset.quick, id:null, type:preset.type||'expense', amount:0, dir:'in', cat:null, date:todayIso(), note:'', recurringId:null, rec:!!preset.rec, freq:'monthly', end:'', dyn:0};
+         : {mode:'tx', quick:!!preset.quick, id:null, type:preset.type||'expense', amount:0, dir:'in', cat:preset.cat||null, date:todayIso(), note:'', recurringId:null, rec:!!preset.rec, freq:'monthly', end:'', dyn:0};
   openSheet(formHtml(), F.type);
   if(!tx && !F.quick){ const a=$('#f-amount'); if(a) a.focus({preventScroll:true}); }
 }
 function openRuleForm(rule, preset={}){
   F = rule ? {mode:'rule', id:rule.id, type:rule.type, amount:Math.abs(rule.amount), dir:rule.amount<0?'out':'in', cat:rule.cat, date:rule.start, note:rule.note||'', freq:rule.freq, end:rule.end||'', active:rule.active!==false, dyn:rule.dyn||0, cur:Math.abs(currentAmount(rule))}
-           : {mode:'rule', id:null, type:preset.type||'expense', amount:0, dir:'in', cat:null, date:todayIso(), note:'', freq:'monthly', end:'', active:true, dyn:0};
+           : {mode:'rule', id:null, type:preset.type||'expense', amount:0, dir:'in', cat:preset.cat||null, date:todayIso(), note:'', freq:'monthly', end:'', active:true, dyn:0};
   openSheet(formHtml(), F.type);
 }
 function readForm(){
@@ -1466,6 +1534,7 @@ async function submitForm(){
   readForm();
   if(!(F.amount>0)){ toast('Bitte einen gültigen Betrag eingeben, z. B. 12,50.'); $('#f-amount')?.focus(); return; }
   const amount = F.type==='save' && F.dir==='out' ? -F.amount : F.amount;
+  if(F.type==='save' && !F.cat){ toast('Bitte wähle das Konto: z. B. Tagesgeld oder ETF-Depot.'); const c=$('#f-cats'); if(c) c.scrollIntoView({block:'center'}); return; }
   const cat = F.cat || FALLBACK[F.type];
   const end = F.end && F.end >= F.date ? F.end : null;
   const t = todayIso();
@@ -1493,7 +1562,10 @@ async function submitForm(){
     S.settings.recurring.push(nr);
   }
   if(F.rec && F.date > t && !F.id){
-    closeSheet(); render(); await Store.saveSettings(); toast(`Wiederkehrende Buchung angelegt, erste am ${dmy(parse(F.date))}`); return;
+    const rule = S.settings.recurring.find(x=>x.id===ruleId), first = rule ? nextDue(rule) : null, isSave = F.type==='save';
+    closeSheet(); render(); Store.saveSettings();
+    toast(`${isSave ? 'Sparplan' : 'Wiederkehrende Buchung'} angelegt – erste Buchung am ${first ? dmy(parse(first)) : '–'}. Zu finden unter Fixkosten${isSave ? ' und bei Sparen unter „Geplant“' : ' und unter Buchungen bei „Geplant“'}.`);
+    return;
   }
   const tx = {id: F.id || (ruleId && F.rec ? `r-${ruleId}-${F.date}` : newId()), type:F.type, amount, cat, date:F.date, note:F.note, created:F.created||Date.now()};
   if(ruleId) tx.recurringId = ruleId;
@@ -1542,6 +1614,7 @@ function settingsHtml(){
     h += `<div class="set-type">${label}</div><div class="chips">${visibleCats(type).map(c=>`<span class="chip del">${esc(c.icon)} ${esc(c.name)}${c.id===FALLBACK[type]?'':`<button data-action="cat-del" data-type="${type}" data-id="${esc(c.id)}" aria-label="${esc(c.name)} entfernen">×</button>`}</span>`).join('')}</div>`;
     h += `<div class="row" style="margin-top:8px"><input class="inp emoji-inp" id="ce-${type}" maxlength="8" placeholder="🙂" aria-label="Symbol"><input class="inp" id="cn-${type}" maxlength="30" placeholder="Neue Kategorie" aria-label="Name der neuen Kategorie"><button class="btn" data-action="cat-add" data-type="${type}">Hinzufügen</button></div>`;
   }
+  h += `<h3 class="set-h">Wiederkehrende Buchungen</h3><div class="switch-row" style="margin-top:0;border-top:0;padding-top:0"><div><b>Nur an Arbeitstagen buchen</b><small>Fällt ein Termin auf ein Wochenende oder einen gesetzlichen Feiertag in Baden-Württemberg, bucht die App am nächsten Arbeitstag.</small></div><label class="switch"><input type="checkbox" id="wd-on" ${shiftOn()?'checked':''}><span></span></label></div>`;
   h += `<h3 class="set-h">Schnellerfassung</h3><p class="muted" style="margin:0">Beim Öffnen der App erscheint sofort „Neue Ausgabe“ mit Ziffernblock: Betrag tippen, Kategorie wählen, speichern. Tipp: Zieh das App-Symbol ins Dock unten auf dem Home-Bildschirm – dann bist du von überall mit einem Tipp beim Eintragen.</p>`;
   h += `<div class="switch-row"><div><b>Beim Öffnen direkt erfassen</b><small>${uiCfg().quick ? 'Eingeschaltet' : 'Ausgeschaltet'}</small></div><label class="switch"><input type="checkbox" id="quick-on" ${uiCfg().quick?'checked':''}><span></span></label></div>`;
   h += `<h3 class="set-h">Kursabruf (optional)</h3><p class="muted" style="margin:0">Eingeschaltet erscheint im ETF-Konto der Knopf „Kurs abrufen“. Nur beim Antippen fragt die App bei Alpha Vantage (USA) den letzten Schlusskurs ab. Übertragen werden dabei deine IP-Adresse, das Börsenkürzel und dein Schlüssel – keine Beträge, keine Buchungen.</p>`;
@@ -1657,7 +1730,7 @@ function toast(msg, actionLabel, fn){
 
 /* ---------- Aktionen ---------- */
 const A = {
-  tab(el){ S.ui.view = el.dataset.view; S.ui.limit = 150; render(); window.scrollTo(0,0); },
+  tab(el){ if(el.dataset.view==='list' && S.ui.view!=='list') S.ui.f = {type:'all', cat:null, catType:null, range:null, q:''}; S.ui.view = el.dataset.view; S.ui.limit = 150; render(); window.scrollTo(0,0); },
   unit(el){ S.ui.unit = el.dataset.v; render(); },
   prev(){ S.ui.anchor = shift(S.ui.unit, S.ui.anchor, -1); render(); },
   next(){ S.ui.anchor = shift(S.ui.unit, S.ui.anchor, 1); render(); },
@@ -1675,9 +1748,9 @@ const A = {
   'clear-cat'(){ S.ui.f.cat=null; S.ui.f.catType=null; render(); },
   'clear-range'(){ S.ui.f.range=null; render(); },
   more(){ S.ui.limit += 150; render(); },
-  add(el){ openTxForm(null, {type: el.dataset.type}); },
+  add(el){ openTxForm(null, {type: el.dataset.type, cat: el.dataset.cat}); },
   'edit-tx'(el){ const t=S.tx.find(x=>x.id===el.dataset.id); if(t) openTxForm(t); },
-  'rule-new'(el){ openRuleForm(null, {type: el.dataset.type}); },
+  'rule-new'(el){ openRuleForm(null, {type: el.dataset.type, cat: el.dataset.cat}); },
   'edit-rule'(el){ const r=S.settings.recurring.find(x=>x.id===el.dataset.id); if(r) openRuleForm(r); else toast('Diese wiederkehrende Buchung gibt es nicht mehr.'); },
   close(){ closeSheet(); },
   'f-type'(el){
@@ -1774,6 +1847,7 @@ document.addEventListener('input', e=>{
 });
 document.addEventListener('change', e=>{
   if(e.target.id==='f-rec' && F){ F.rec = e.target.checked; $('#f-recopts').hidden = !F.rec; }
+  if(e.target.id==='wd-on'){ S.settings.workday = e.target.checked; Store.saveSettings(); render(); toast(e.target.checked ? 'Buchungen fallen jetzt auf Arbeitstage' : 'Buchungen fallen auf den Plantermin'); }
   if(e.target.id==='quick-on'){ LS.set(UIKEY, {quick:e.target.checked}); refreshSettings(); toast(e.target.checked ? 'Schnellerfassung eingeschaltet' : 'Schnellerfassung ausgeschaltet'); }
   if(e.target.id==='q-on'){ const q=quoteCfg(); setQuoteCfg({on:e.target.checked, key:q.key}); refreshSettings(); render(); }
   if(e.target.id==='imp-file' && e.target.files && e.target.files[0]){
@@ -1793,6 +1867,11 @@ document.addEventListener('visibilitychange', ()=>{
 });
 if('serviceWorker' in navigator && window.isSecureContext && location.protocol!=='file:') navigator.serviceWorker.register('sw.js').catch(()=>{});
 
+// Sicherheitsnetz: unerwartete Fehler sichtbar machen statt still abzubrechen (gespeicherte Daten bleiben unberührt)
+let lastErrToast = 0;
+function reportError(){ if(Date.now()-lastErrToast < 4000) return; lastErrToast = Date.now(); try{ toast('Da ist etwas schiefgelaufen. Deine gespeicherten Daten sind sicher – bitte den letzten Schritt prüfen.'); }catch(e){} }
+window.addEventListener('error', reportError);
+window.addEventListener('unhandledrejection', reportError);
 Store.init();
 </script>
 </body>
