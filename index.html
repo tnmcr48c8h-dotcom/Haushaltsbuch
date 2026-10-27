@@ -21,6 +21,7 @@
   --out:#963A60; --out-soft:rgba(150,58,96,.13);
   --in:#2A7652; --in-soft:rgba(42,118,82,.13);
   --save:#2C5C9A; --save-soft:rgba(44,92,154,.13);
+  --etf:#7A4FB8; --etf-soft:rgba(122,79,184,.16);
   --warn:#A3542A;
   --f-display:ui-rounded,"SF Pro Rounded","Segoe UI Variable Display","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
   --f-body:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
@@ -36,6 +37,7 @@
     --out:#E585AA; --out-soft:rgba(229,133,170,.16);
     --in:#71CB9A; --in-soft:rgba(113,203,154,.16);
     --save:#8AAEEA; --save-soft:rgba(138,174,234,.16);
+    --etf:#BBA0F2; --etf-soft:rgba(187,160,242,.2);
     --warn:#E39A6B;
     color-scheme:dark;
   }
@@ -46,6 +48,7 @@
   --out:#E585AA; --out-soft:rgba(229,133,170,.16);
   --in:#71CB9A; --in-soft:rgba(113,203,154,.16);
   --save:#8AAEEA; --save-soft:rgba(138,174,234,.16);
+  --etf:#BBA0F2; --etf-soft:rgba(187,160,242,.2);
   --warn:#E39A6B;
   color-scheme:dark;
 }
@@ -146,6 +149,12 @@ select.inp{-webkit-appearance:none;appearance:none;padding-right:34px;background
 .chart .pb-in{fill:var(--in)}
 .chart .pb-out{fill:var(--out)}
 .chart .pb-in.dim,.chart .pb-out.dim{opacity:.45}
+.chart .inc-line{fill:none;stroke:var(--in);stroke-width:2;stroke-dasharray:6 4;opacity:.9}
+.chart-legend .k-inc{width:16px;height:0;border-top:2px dashed var(--in)}
+.chart .a-cash{fill:var(--save-soft)}
+.chart .l-cash{fill:none;stroke:var(--save);stroke-width:2;stroke-linejoin:round}
+.chart .a-etf{fill:var(--etf-soft)}
+.chart .l-etf{fill:none;stroke:var(--etf);stroke-width:2.5;stroke-linejoin:round}
 .chart .l-inc{fill:none;stroke:var(--in);stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round}
 .chart .dot.in{fill:var(--in)}
 .chart-legend .lv{color:var(--ink);font-variant-numeric:tabular-nums}
@@ -357,7 +366,7 @@ details summary{font-size:14.5px}
 
 <script>
 'use strict';
-const APP_VERSION = '1.5';
+const APP_VERSION = '1.6';
 /* ---------- Helfer ---------- */
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -422,6 +431,7 @@ const FALLBACK = {expense:'sonst-a', income:'sonst-e', save:'sonst-s'};
 const TYPE_NAME = {expense:'Ausgabe', income:'Einnahme', save:'Sparen'};
 const FREQ = {weekly:'wöchentlich', monthly:'monatlich', quarterly:'vierteljährlich', halfyearly:'halbjährlich', yearly:'jährlich'};
 const FREQ_FACTOR = {weekly:52/12, monthly:1, quarterly:1/3, halfyearly:1/6, yearly:1/12};
+const DYN_OPTS = [0.02, 0.03, 0.05];
 
 function defaultSettings(){ const c={}; for(const k in DEFAULT_CATS) c[k]=DEFAULT_CATS[k].map(([id,name,icon])=>k==='save' ? {id,name,icon,kind:id==='etf'?'etf':'cash',snaps:[]} : {id,name,icon}); return {v:2, categories:c, recurring:[]}; }
 const TYPES = ['expense','income','save'];
@@ -444,7 +454,9 @@ function cleanTxList(list){ const seen=new Set(), out=[]; for(const t of (Array.
 function cleanRule(r){
   if(!r || typeof r!=='object' || !TYPES.includes(r.type) || !isDate(r.start) || !FREQ[r.freq]) return null;
   const amount = cleanAmount(r.type, r.amount); if(amount==null) return null;
-  return {id:str(r.id,80) || newId(), type:r.type, amount, cat:str(r.cat,60) || FALLBACK[r.type], note:str(r.note,120), freq:r.freq, start:r.start, end:isDate(r.end) ? r.end : null, active:r.active!==false, until:isDate(r.until) ? r.until : null};
+  const o = {id:str(r.id,80) || newId(), type:r.type, amount, cat:str(r.cat,60) || FALLBACK[r.type], note:str(r.note,120), freq:r.freq, start:r.start, end:isDate(r.end) ? r.end : null, active:r.active!==false, until:isDate(r.until) ? r.until : null};
+  if(r.type==='save' && DYN_OPTS.includes(Number(r.dyn))) o.dyn = Number(r.dyn);
+  return o;
 }
 // Hält den Speicherbedarf klein: automatische Kursstände älter als 2 Jahre nur noch einer pro Monat; eigene Einträge bleiben immer.
 function thinSnaps(list){
@@ -626,7 +638,7 @@ async function runRecurring(){
       if(after >= t) continue;
       for(const d of occurrences(r, after, t)){
         const id = `r-${r.id}-${d}`;
-        if(!have.has(id)) add.push({id, type:r.type, amount:r.amount, cat:r.cat, note:r.note||'', date:d, recurringId:r.id, created:Date.now()});
+        if(!have.has(id)) add.push({id, type:r.type, amount:amountAt(r, d), cat:r.cat, note:r.note||'', date:d, recurringId:r.id, created:Date.now()});
       }
       r.until = t; changed = true;
     }
@@ -635,7 +647,16 @@ async function runRecurring(){
     if(add.length) toast(add.length===1 ? '1 wiederkehrende Buchung ergänzt' : `${add.length} wiederkehrende Buchungen ergänzt`);
   } finally { recurringBusy = false; }
 }
-const monthlyEq = r => Math.round(r.amount * (FREQ_FACTOR[r.freq]||1));
+// Betrag einer Fälligkeit; bei Dynamik steigt er ab dem Start jeden Monat leicht (nach 12 Monaten genau um den Jahressatz)
+function dynYears(r, d){
+  const a = parse(r.start), b = parse(d);
+  if(r.freq==='weekly') return Math.max(0, daysBetween(a, b)) / 365.25;
+  return Math.max(0, (b.getFullYear()-a.getFullYear())*12 + (b.getMonth()-a.getMonth())) / 12;
+}
+function amountAt(r, d){ return r.dyn ? Math.round(r.amount * Math.pow(1 + r.dyn, dynYears(r, d))) : r.amount; }
+const currentAmount = r => amountAt(r, nextDue(r) || todayIso());
+const monthlyEq = r => Math.round(currentAmount(r) * (FREQ_FACTOR[r.freq]||1));
+const dynLabel = x => `+${String(Math.round(x*100))} % p. a.`;
 
 /* ---------- Sparkonten ----------
    Kontostand bzw. Depotwert = zuletzt eingetragener Stand + alle Sparbuchungen danach.
@@ -649,6 +670,12 @@ const accList = a => S.tx.filter(t=>t.type==='save' && t.cat===a.id);
 function lastSnap(a, d){ const s=a.snaps||[]; for(let i=s.length-1;i>=0;i--) if(s[i].date<=d) return s[i]; return null; }
 function investedAt(a, d, list){ const b = a.base && a.base.date<=d ? a.base : null; let v=b ? b.invested : 0; for(const t of list) if(t.date<=d && afterMark(t,b)) v+=t.amount; return v; }
 function valueAt(a, d, list){ const sn=lastSnap(a,d); if(!sn) return investedAt(a,d,list); let v=sn.value; for(const t of list) if(t.date<=d && afterMark(t,sn)) v+=t.amount; return v; }
+// Für die Verlaufsgrafik: vor dem ersten eingetragenen Stand aus diesem zurückrechnen (abzüglich der Buchungen dazwischen)
+function chartValueAt(a, d, list){
+  const first = (a.snaps||[])[0];
+  if(first && d < first.date){ let v = first.value; for(const t of list) if(t.date > d && !afterMark(t, first)) v -= t.amount; return v; }
+  return valueAt(a, d, list);
+}
 function accStats(a, list){
   list = list || accList(a); const t=todayIso();
   const value=valueAt(a,t,list), invested=investedAt(a,t,list);
@@ -844,6 +871,23 @@ function avgTotals(list){
   o.inc=Math.round(o.inc); o.exp=Math.round(o.exp); o.sav=Math.round(o.sav); for(const k in o.byCat) o.byCat[k]=Math.round(o.byCat[k]);
   return o;
 }
+// Monatseinnahmen: gebuchte Einnahmen + noch erwartete feste Einnahmen (Fixkosten) des Monats
+let incCache = new Map();
+function monthIncome(y, m){
+  const k = y*12+m; if(incCache.has(k)) return incCache.get(k);
+  const pre = `${y}-${pad(m+1)}`; let v = 0;
+  for(const t of S.tx) if(t.type==='income' && t.date.startsWith(pre)) v += t.amount;
+  const end = iso(new Date(y, m+1, 0, 12)), today = todayIso();
+  let planned = 0;
+  if(end > today) for(const r of S.settings.recurring){
+    if(!r.active || r.type!=='income') continue;
+    const from = [today, r.until||'', iso(new Date(y, m, 0, 12))].sort().pop();
+    for(const d of occurrences(r, from, end)) planned += amountAt(r, d);
+  }
+  const res = {v: v+planned, planned}; incCache.set(k, res); return res;
+}
+const incomeShare = d => { const x=parse(iso(d)); const n=new Date(x.getFullYear(), x.getMonth()+1, 0).getDate(); return monthIncome(x.getFullYear(), x.getMonth()).v / n; };
+function proratedIncome(start, end){ let v=0, planned=false; for(let d=parse(iso(start)); iso(d)<=iso(end); d=addDays(d,1)){ v += incomeShare(d); if(monthIncome(d.getFullYear(), d.getMonth()).planned) planned=true; } return {v:Math.round(v), planned}; }
 function expByDate(){ const m={}; for(const t of S.tx) if(t.type==='expense') m[t.date]=(m[t.date]||0)+t.amount; return m; }
 function niceMax(c){
   const e = Math.max(c/100, 1); const p = Math.pow(10, Math.floor(Math.log10(e)));
@@ -854,10 +898,12 @@ function niceMax(c){
 /* ---------- Diagramme ---------- */
 function svgBars(items, opts={}){
   const W=340, H=158, top=18, bot=22, left=2, right=2, n=items.length;
-  const max = niceMax(Math.max(1, ...items.map(i=>Math.max(i.value, i.ghost||0))));
+  const max = niceMax(Math.max(1, ...items.map(i=>Math.max(i.value, i.ghost||0, i.inc||0))));
   const slot=(W-left-right)/n, bw=Math.min(24, slot*.6);
   const y = v => top + (H-top-bot) * (1 - Math.max(0,v)/max);
   let g = `<line class="grid" x1="0" x2="${W}" y1="${y(max)}" y2="${y(max)}"/><text class="axis" x="0" y="${y(max)-5}">${fmt0(max)}</text><line class="base" x1="0" x2="${W}" y1="${H-bot}" y2="${H-bot}"/>`;
+  // Einnahmen-Linie (je Tag, springt nur an Monatsgrenzen)
+  if(items.some(it=>it.inc>0)){ let dpath=''; items.forEach((it,i)=>{ const x0=left+slot*i, x1=x0+slot, yy=y(it.inc||0).toFixed(1); dpath += (i ? `L${x0.toFixed(1)} ${yy}` : `M${x0.toFixed(1)} ${yy}`) + `L${x1.toFixed(1)} ${yy}`; }); g += `<path class="inc-line" d="${dpath}"/>`; }
   items.forEach((it,i)=>{
     const cx = left + slot*(i+.5), h = (H-bot) - y(it.value);
     if(it.value>0) g += `<rect class="bar${opts.cls?' '+opts.cls:''}${it.active?' on':''}" x="${(cx-bw/2).toFixed(1)}" y="${y(it.value).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(1.5,h).toFixed(1)}" rx="${Math.min(4,h/2).toFixed(1)}"/>`;
@@ -883,6 +929,24 @@ function svgPairs(items, opts={}){
     g += `<rect class="hit" x="${(slot*i).toFixed(1)}" y="0" width="${slot.toFixed(1)}" height="${H}" data-action="drill" data-unit="${it.drill.unit}" data-date="${it.drill.date}"><title>${esc(`${it.title}: Einnahmen ${fmt(it.inc)}, Ausgaben ${fmt(it.exp)}`)}</title></rect>`;
   });
   return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(opts.aria||'Einnahmen und Ausgaben pro Monat')}">${g}</svg>`;
+}
+function svgStack(n, layers, opts={}){
+  const W=340, H=170, top=20, bot=22, left=2, right=10;
+  const tot = Array.from({length:n}, (_,i)=>layers.reduce((s,l)=>s+Math.max(0,l.vals[i]||0),0));
+  const max = niceMax(Math.max(1, ...tot));
+  const x = i => left + (W-left-right) * (n<=1 ? 0 : i/(n-1));
+  const y = v => top + (H-top-bot) * (1 - v/max);
+  let g = `<line class="grid" x1="0" x2="${W}" y1="${y(max)}" y2="${y(max)}"/><text class="axis" x="0" y="${y(max)-5}">${fmt0(max)}</text><line class="base" x1="0" x2="${W}" y1="${y(0)}" y2="${y(0)}"/>`;
+  let lower = Array(n).fill(0);
+  for(const l of layers){
+    const upper = lower.map((b,i)=>b+Math.max(0,l.vals[i]||0));
+    const up = upper.map((v,i)=>`${x(i).toFixed(1)} ${y(v).toFixed(1)}`), lo = lower.map((v,i)=>`${x(i).toFixed(1)} ${y(v).toFixed(1)}`).reverse();
+    g += `<path class="${l.area}" d="M${up.join('L')}L${lo.join('L')}Z"/><path class="${l.line}" d="M${up.join('L')}"/>`;
+    lower = upper;
+  }
+  g += `<circle class="dot sv" cx="${x(n-1).toFixed(1)}" cy="${y(tot[n-1]).toFixed(1)}" r="4.5"/>`;
+  for(const l of (opts.xLabels||[])) g += `<text class="axis" x="${x(l.i).toFixed(1)}" y="${H-5}" text-anchor="${l.i===0?'start':l.i===n-1?'end':'middle'}">${esc(l.t)}</text>`;
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(opts.aria||'Gestapeltes Flächendiagramm')}">${g}</svg>`;
 }
 function svgLines(n, series, opts={}){
   const W=340, H=168, top=20, bot=22, left=2, right=10;
@@ -911,12 +975,12 @@ function homeChart(r, mode){
   const E = expByDate(), cmps = compareRanges(r, mode), t = todayIso();
   const avgAt = fnDate => Math.round(cmps.reduce((s,c)=>s+(E[iso(fnDate(c))]||0),0)/cmps.length);
   if(r.unit==='day'){
-    const items=[]; for(let i=13;i>=0;i--){ const d=addDays(r.start,-i); items.push({label: i%2===0 ? String(d.getDate()) : '', title:`${WD[d.getDay()]} ${dm(d)}`, value:E[iso(d)]||0, active:i===0, drill:{unit:'day',date:iso(d)}}); }
-    return {title:'Die letzten 14 Tage', svg:svgBars(items,{aria:'Ausgaben der letzten 14 Tage'}), legend:`<span><i class="k-bar"></i>Ausgaben pro Tag</span>`};
+    const items=[]; for(let i=13;i>=0;i--){ const d=addDays(r.start,-i); items.push({label: i%2===0 ? String(d.getDate()) : '', title:`${WD[d.getDay()]} ${dm(d)}`, value:E[iso(d)]||0, inc:Math.round(incomeShare(d)), active:i===0, drill:{unit:'day',date:iso(d)}}); }
+    return {title:'Die letzten 14 Tage', svg:svgBars(items,{aria:'Ausgaben der letzten 14 Tage'}), legend:`<span><i class="k-bar"></i>Ausgaben pro Tag</span><span><i class="k-inc"></i>Einnahmen pro Tag (Ø des Monats)</span>`};
   }
   if(r.unit==='week'){
-    const items=[]; for(let i=0;i<7;i++){ const d=addDays(r.start,i); items.push({label:WD[d.getDay()].replace('.',''), title:`${WD[d.getDay()]} ${dm(d)}`, value:E[iso(d)]||0, ghost:avgAt(c=>addDays(c.start,i)), active:iso(d)===t, drill:{unit:'day',date:iso(d)}}); }
-    return {title:'Ausgaben pro Tag', svg:svgBars(items,{aria:'Ausgaben pro Wochentag'}), legend:`<span><i class="k-bar"></i>Diese Woche</span><span><i class="k-ghost"></i>${esc(cmpChipLabel(r.unit,mode,r))}</span>`};
+    const items=[]; for(let i=0;i<7;i++){ const d=addDays(r.start,i); items.push({label:WD[d.getDay()].replace('.',''), title:`${WD[d.getDay()]} ${dm(d)}`, value:E[iso(d)]||0, inc:Math.round(incomeShare(d)), ghost:avgAt(c=>addDays(c.start,i)), active:iso(d)===t, drill:{unit:'day',date:iso(d)}}); }
+    return {title:'Ausgaben pro Tag', svg:svgBars(items,{aria:'Ausgaben pro Wochentag'}), legend:`<span><i class="k-bar"></i>Diese Woche</span><span><i class="k-ghost"></i>${esc(cmpChipLabel(r.unit,mode,r))}</span><span><i class="k-inc"></i>Einnahmen pro Tag (Ø des Monats)</span>`};
   }
   if(r.unit==='year'){
     const M = {}, IN = {}; for(const x of S.tx){ const k=x.date.slice(0,7); if(x.type==='expense') M[k]=(M[k]||0)+x.amount; else if(x.type==='income') IN[k]=(IN[k]||0)+x.amount; }
@@ -955,6 +1019,7 @@ function homeChart(r, mode){
 /* ---------- Ansichten ---------- */
 function render(){ if(render.q) return; render.q = requestAnimationFrame(()=>{ render.q=0; doRender(); }); }
 function doRender(){
+  incCache = new Map();
   if(!Store.ready){ $('#view').innerHTML = '<p class="muted" style="margin-top:40px;text-align:center">Lade Daten …</p>'; return; }
   const sync = $('#sync');
   const st = Store.ok ? ['ok','Nur lokal'] : ['local','Nicht gespeichert'];
@@ -984,6 +1049,8 @@ function viewHome(){
   if(!modes.includes(S.ui.cmp)) S.ui.cmp = modes[0];
   const mode=S.ui.cmp, cmps=compareRanges(r,mode), ph=cmpPhrase(u,mode,r);
   const cur=totals(r.start,r.end), ref=avgTotals(cmps.map(c=>totals(c.start,c.end)));
+  const partial = u==='day' || u==='week';
+  let incInfo = null; if(partial){ incInfo = proratedIncome(r.start, r.end); cur.inc = incInfo.v; }
   const tt=rangeTitle(r), now=inRange(r, todayDate()), today=todayDate();
   let h = '';
   if(!Store.ok) h += `<div class="notice bad"><b>Speichern nicht möglich</b><p>Dieser Browser erlaubt gerade keine Speicherung (zum Beispiel im privaten Modus). Neue Einträge gehen beim Schließen verloren. Bitte sofort eine Sicherung erstellen.</p></div>`;
@@ -1017,11 +1084,11 @@ function viewHome(){
   const sv=Math.max(cur.sav,0), rest=cur.inc-cur.exp-sv, base=Math.max(cur.inc, cur.exp+sv, 1);
   h += `<div class="flow"><div class="bar" aria-hidden="true"><i class="e" style="width:${cur.exp/base*100}%"></i><i class="s" style="width:${sv/base*100}%"></i>${rest>0?`<i class="r" style="width:${rest/base*100}%"></i>`:''}</div>
     <div class="legend">
-      <div style="--c:var(--in)"><span>Einnahmen</span><b>${fmt(cur.inc)}</b></div>
+      <div style="--c:var(--in)"><span>Einnahmen${partial?' (anteilig)':''}</span><b>${fmt(cur.inc)}</b></div>
       <div style="--c:var(--out)"><span>Ausgaben</span><b>${fmt(cur.exp)}</b></div>
       <div style="--c:var(--save)"><span>Gespart</span><b>${fmt(cur.sav)}</b></div>
       ${cur.inc>0 ? `<div style="--c:${rest>=0?'var(--in)':'var(--out)'}"><span>${rest>=0?'Übrig':'Fehlbetrag'}</span><b class="${rest<0?'neg':''}">${fmt(Math.abs(rest))}</b></div>` : ''}
-    </div>${cur.inc===0 && (cur.exp||cur.sav) ? `<p class="flow-note">In diesem Zeitraum sind keine Einnahmen erfasst.</p>` : ''}</div>`;
+    </div>${partial ? `<p class="flow-note">Einnahmen anteilig: dein Monatseinkommen gleichmäßig auf die Tage verteilt${incInfo.planned ? ', inklusive noch erwarteter fester Einnahmen' : ''}.</p>` : (cur.inc===0 && (cur.exp||cur.sav) ? `<p class="flow-note">In diesem Zeitraum sind keine Einnahmen erfasst.</p>` : '')}</div>`;
 
   // Vergleich
   h += `<div class="cmp"><span>Vergleichen mit</span><div class="chips">${modes.map(m=>`<button class="chip" data-action="cmp" data-v="${m}" aria-pressed="${m===mode}">${esc(cmpChipLabel(u,m,r))}</button>`).join('')}</div></div>`;
@@ -1045,7 +1112,7 @@ function viewHome(){
   h += `</section>`;
 
   // Verlauf
-  const hist=[]; for(let k=5;k>=0;k--){ const rr=rangeFor(u, shift(u, r.start, -k)); const tt2=totals(rr.start, rr.end); hist.push({rr, ...tt2}); }
+  const hist=[]; for(let k=5;k>=0;k--){ const rr=rangeFor(u, shift(u, r.start, -k)); const tt2=totals(rr.start, rr.end); if(partial) tt2.inc = proratedIncome(rr.start, rr.end).v; hist.push({rr, ...tt2}); }
   h += `<section class="sec"><div class="sec-h"><h2>Verlauf</h2><small>letzte 6 ${ {day:'Tage',week:'Wochen',month:'Monate',year:'Jahre'}[u] }</small></div><div class="panel"><table class="hist"><thead><tr><th>Zeitraum</th><th>Ausgaben</th><th>Einnahmen</th><th>Differenz</th></tr></thead><tbody>`;
   for(const x of hist.reverse()){
     const diff=x.inc-x.exp;
@@ -1110,7 +1177,7 @@ function viewFix(){
   h += `<div class="panel" style="margin-top:14px"><div class="kpis"><div><span>Feste Einnahmen</span><b>${fmt(i)}</b></div><div><span>Sparpläne</span><b>${fmt(s)}</b></div><div><span>Bleibt monatlich</span><b style="color:${left<0?'var(--out)':'var(--in)'}">${left<0?MINUS:''}${fmt(Math.abs(left))}</b></div><div><span>Fixkosten im Jahr</span><b>${fmt0(e*12)}</b></div></div></div>`;
   // Noch fällig diesen Monat
   const t=todayDate(), eom=iso(new Date(t.getFullYear(), t.getMonth()+1, 0, 12));
-  let due=0, dueN=0; for(const r of act){ if(r.type!=='expense') continue; const o=occurrences(r, todayIso(), eom); due+=o.length*r.amount; dueN+=o.length; }
+  let due=0, dueN=0; for(const r of act){ if(r.type!=='expense') continue; for(const d of occurrences(r, todayIso(), eom)){ due+=amountAt(r, d); dueN++; } }
   if(dueN) h += `<p class="sub" style="margin-top:12px">Bis Monatsende werden noch ${dueN===1?'1 Zahlung':`${dueN} Zahlungen`} über ${fmt(due)} fällig.</p>`;
   h += `<section class="sec"><div class="sec-h"><h2>Wiederkehrende Buchungen</h2></div>`;
   if(!rules.length){
@@ -1122,9 +1189,9 @@ function viewFix(){
       for(const r of list){
         const c=catOf(r.type,r.cat), nd=r.active ? nextDue(r) : null;
         const ndD = nd ? parse(nd) : null;
-        const meta = [r.note ? c.name : '', FREQ[r.freq], r.active ? (ndD ? `nächste ${ndD.getFullYear()===todayDate().getFullYear() ? dm(ndD) : dmy(ndD)}` : 'beendet') : 'pausiert'].filter(Boolean).join(', ');
+        const meta = [r.note ? c.name : '', FREQ[r.freq], r.dyn ? `↗ ${dynLabel(r.dyn)}` : '', r.active ? (ndD ? `nächste ${ndD.getFullYear()===todayDate().getFullYear() ? dm(ndD) : dmy(ndD)}` : 'beendet') : 'pausiert'].filter(Boolean).join(', ');
         const cls = type==='expense'?'out':type==='income'?'in':'sv';
-        h += `<button class="tx" data-action="edit-rule" data-id="${esc(r.id)}" style="${r.active?'':'opacity:.55'}"><span class="ic">${esc(c.icon)}</span><span class="m"><span class="c">${esc(r.note || c.name)}</span><span class="n">${esc(meta)}</span></span><span class="amt ${cls}">${type==='save' ? signed(r.amount) : fmt(r.amount)}</span></button>`;
+        h += `<button class="tx" data-action="edit-rule" data-id="${esc(r.id)}" style="${r.active?'':'opacity:.55'}"><span class="ic">${esc(c.icon)}</span><span class="m"><span class="c">${esc(r.note || c.name)}</span><span class="n">${esc(meta)}</span></span><span class="amt ${cls}">${type==='save' ? signed(currentAmount(r)) : fmt(currentAmount(r))}</span></button>`;
       }
     }
     h += `<button class="btn solid" style="margin-top:18px;width:100%" data-action="rule-new">Wiederkehrende Buchung anlegen</button>`;
@@ -1182,11 +1249,28 @@ function viewSave(){
   const mr=rangeFor('month',t), m=totals(mr.start, mr.end), yr=rangeFor('year',t), y=totals(yr.start, yr.end);
   const rate = m.inc>0 ? Math.round(m.sav/m.inc*100) : null;
   h += `<section class="sec"><div class="sec-h"><h2>Sparleistung</h2></div><div class="panel"><div class="kpis"><div><span>Im ${MONTHS[t.getMonth()]}</span><b>${fmt(m.sav)}</b></div><div><span>Sparquote ${MONTHS[t.getMonth()]}</span><b>${rate==null?'–':rate+' %'}</b></div><div><span>Seit Jahresbeginn</span><b>${fmt(y.sav)}</b></div><div><span>Ø pro Monat ${t.getFullYear()}</span><b>${fmt(Math.round(y.sav/(t.getMonth()+1)))}</b></div></div></div></section>`;
-  // Entwicklung gesamt
-  if(main.some(r=>r.list.length || r.s.snaps.length)){
-    const vals=[], xl=[];
-    for(let k=11;k>=0;k--){ const end=new Date(t.getFullYear(), t.getMonth()-k+1, 0, 12); const e = k===0 ? todayIso() : iso(end); vals.push(main.reduce((x,r)=>x+valueAt(r.a, e, r.list),0)); const i=11-k; if(i%3===0 || i===11) xl.push({i, t:k===0?'heute':MSHORT[end.getMonth()]}); }
-    h += `<section class="sec"><div class="sec-h"><h2>Entwicklung</h2><small>letzte 12 Monate</small></div><div class="panel">${svgLines(12,[{vals, cls:'l-sav', area:'a-sav', dot:true, dotCls:'sv'}],{xLabels:xl, aria:'Entwicklung der Ersparnisse'})}</div></section>`;
+  // Entwicklung, getrennt nach Tagesgeld/Konten und ETF/Depot, gestapelt.
+  // Beginnt mit dem ersten erfassten Stand; vor dem ersten Stand eines Kontos wird aus diesem Stand zurückgerechnet (statt 0 €).
+  const firsts = []; for(const r of main){ if(r.a.snaps && r.a.snaps.length) firsts.push(r.a.snaps[0].date); if(r.list.length) firsts.push(r.list[r.list.length-1].date); if(r.a.base) firsts.push(r.a.base.date); }
+  if(firsts.length){
+    const ti = todayIso(), lim = iso(addMonths(t, -12));
+    const start = [firsts.sort()[0], lim].sort().pop();
+    const span = daysBetween(parse(start), t), pts = [], xl = [];
+    if(span <= 45){ for(let i=0;i<=span;i++) pts.push(iso(addDays(parse(start), i))); }
+    else { let m = new Date(parse(start).getFullYear(), parse(start).getMonth()+1, 0, 12); while(iso(m) < ti){ pts.push(iso(m)); m = new Date(m.getFullYear(), m.getMonth()+2, 0, 12); } pts.push(ti); }
+    if(pts.length >= 2){
+      const cash=[], etf=[];
+      for(const d of pts){ let c=0, f=0; for(const r of main){ const v=Math.max(0, chartValueAt(r.a, d, r.list)); if(isEtf(r.a)) f+=v; else c+=v; } cash.push(c); etf.push(f); }
+      const n = pts.length;
+      if(span <= 45){ xl.push({i:0, t:dm(parse(pts[0]))}); if(n>6) xl.push({i:Math.floor((n-1)/2), t:dm(parse(pts[Math.floor((n-1)/2)]))}); xl.push({i:n-1, t:'heute'}); }
+      else { pts.forEach((d,i)=>{ if(i===n-1) xl.push({i, t:'heute'}); else if((n-1-i)%3===0 && i < n-2) xl.push({i, t:MSHORT[parse(d).getMonth()]}); }); }
+      const lc=cash[n-1], lf=etf[n-1];
+      h += `<section class="sec"><div class="sec-h"><h2>Entwicklung</h2><small>aufsummiert, seit ${dm(parse(pts[0]))}${parse(pts[0]).getFullYear()!==t.getFullYear() ? parse(pts[0]).getFullYear() : ''}</small></div><div class="panel">${svgStack(n,[{vals:cash, area:'a-cash', line:'l-cash'},{vals:etf, area:'a-etf', line:'l-etf'}],{xLabels:xl, aria:'Ersparnisse nach Tagesgeld und ETF, aufsummiert'})}
+        <div class="chart-legend"><span><i class="k-bar" style="background:var(--save)"></i>Tagesgeld &amp; Konten <b class="lv">${fmt0(lc)}</b></span><span><i class="k-bar" style="background:var(--etf)"></i>ETF &amp; Depot <b class="lv">${fmt0(lf)}</b></span></div>
+        <p class="flow-diff">Gesamt ${fmt0(lc+lf)}${lc+lf>0 ? `, davon ${Math.round(lf/(lc+lf)*100)} % im ETF` : ''}.</p></div></section>`;
+    } else {
+      h += `<section class="sec"><div class="sec-h"><h2>Entwicklung</h2></div><p class="muted" style="margin:0">Der Verlauf erscheint ab morgen und wächst mit jedem Tag.</p></section>`;
+    }
   }
   if(all.length) h += `<section class="sec"><div class="sec-h"><h2>Letzte Sparbuchungen</h2></div>${all.slice(0,6).map(txRow).join('')}</section>`;
   return h;
@@ -1298,6 +1382,18 @@ function closeSheet(){
 function catChips(){
   return visibleCats(F.type).map(c=>`<button class="chip" data-action="f-cat" data-v="${esc(c.id)}" aria-pressed="${c.id===F.cat}">${esc(c.icon)} ${esc(c.name)}</button>`).join('');
 }
+function dynBoxHtml(){
+  const opts = [['0','Aus'], ...DYN_OPTS.map(x=>[String(x), `${Math.round(x*100)} %`])];
+  return `<div id="f-dynbox" ${F.type==='save'?'':'hidden'}><span class="flabel">Dynamik (Inflationsausgleich)</span>${seg('f-dyn', opts, String(F.dyn||0))}<p class="muted" id="f-dynprev" style="margin:8px 0 0;font-size:13.5px">${dynPreview()}</p></div>`;
+}
+function dynPreview(){
+  if(!F || !F.dyn) return 'Der Sparbetrag bleibt gleich. Mit Dynamik steigt er jeden Monat ein wenig – nach 12 Monaten genau um den gewählten Satz.';
+  const base = parseAmount(($('#f-amount') && $('#f-amount').value) || '') || F.amount || 0;
+  const m = (Math.pow(1+F.dyn, 1/12)-1)*100;
+  if(!(base>0)) return `Der Betrag steigt jeden Monat um etwa ${m.toFixed(2).replace('.',',')} %. Gib oben den Startbetrag ein.`;
+  const at = y => fmt(Math.round(base*Math.pow(1+F.dyn, y)));
+  return `Startbetrag ${fmt(base)}, steigt jeden Monat um etwa ${m.toFixed(2).replace('.',',')} %: nach 1 Jahr ${at(1)}, nach 5 Jahren ${at(5)}, nach 10 Jahren ${at(10)}.`;
+}
 function formHtml(){
   const isRule = F.mode==='rule', editing = !!F.id;
   const title = isRule ? (editing ? 'Wiederkehrende Buchung' : 'Neue wiederkehrende Buchung') : (editing ? 'Buchung bearbeiten' : 'Neue Buchung');
@@ -1311,6 +1407,8 @@ function formHtml(){
   if(isRule){
     h += `<div class="grid2"><label><span class="flabel">${editing?'Beginnt am':'Erste Fälligkeit'}</span><input id="f-date" class="inp" type="date" value="${esc(F.date)}"></label><label><span class="flabel">Rhythmus</span><select id="f-freq" class="inp">${Object.entries(FREQ).map(([k,v])=>`<option value="${k}" ${k===F.freq?'selected':''}>${v}</option>`).join('')}</select></label></div>`;
     h += `<label><span class="flabel">Endet am (optional)</span><input id="f-end" class="inp" type="date" value="${esc(F.end||'')}"></label>`;
+    h += dynBoxHtml();
+    if(editing && F.dyn) h += `<p class="hint">Der Betrag oben ist der Startbetrag ab ${dmy(parse(F.date))}. Aktuell fällig: ${fmt(F.cur||0)}.</p>`;
   } else {
     h += `<span class="flabel">Datum</span><div class="row date-row"><input id="f-date" class="inp" type="date" value="${esc(F.date)}" aria-label="Datum"><button class="chip" data-action="f-day" data-v="0">Heute</button><button class="chip" data-action="f-day" data-v="-1">Gestern</button></div>`;
   }
@@ -1322,7 +1420,7 @@ function formHtml(){
     h += `<p class="hint">Diese Buchung gehört zu einer wiederkehrenden Buchung. Änderungen gelten nur für diesen Eintrag. <button data-action="edit-rule" data-id="${esc(F.recurringId)}">Wiederkehrende Buchung ändern</button></p>`;
   } else {
     h += `<div class="switch-row"><div><b>Wiederholen</b><small>Zum Beispiel Miete, Abo oder Gehalt.</small></div><label class="switch"><input type="checkbox" id="f-rec" ${F.rec?'checked':''}><span></span></label></div>`;
-    h += `<div id="f-recopts" ${F.rec?'':'hidden'}><div class="grid2"><label><span class="flabel">Rhythmus</span><select id="f-freq" class="inp">${Object.entries(FREQ).map(([k,v])=>`<option value="${k}" ${k===F.freq?'selected':''}>${v}</option>`).join('')}</select></label><label><span class="flabel">Endet am (optional)</span><input id="f-end" class="inp" type="date" value="${esc(F.end||'')}"></label></div></div>`;
+    h += `<div id="f-recopts" ${F.rec?'':'hidden'}><div class="grid2"><label><span class="flabel">Rhythmus</span><select id="f-freq" class="inp">${Object.entries(FREQ).map(([k,v])=>`<option value="${k}" ${k===F.freq?'selected':''}>${v}</option>`).join('')}</select></label><label><span class="flabel">Endet am (optional)</span><input id="f-end" class="inp" type="date" value="${esc(F.end||'')}"></label></div>${dynBoxHtml()}</div>`;
   }
   h += `<button class="primary" data-action="f-save">${editing?'Änderungen speichern':'Speichern'}</button>`;
   if(editing) h += `<button class="danger" data-action="f-delete">${isRule?'Wiederkehrende Buchung löschen':'Buchung löschen'}</button>`;
@@ -1344,13 +1442,13 @@ function keypad(k){
 function openTxForm(tx, preset={}){
   const ruleExists = tx && tx.recurringId && S.settings.recurring.some(r=>r.id===tx.recurringId);
   F = tx ? {mode:'tx', quick:false, id:tx.id, type:tx.type, amount:Math.abs(tx.amount), dir:tx.amount<0?'out':'in', cat:tx.cat, date:tx.date, note:tx.note||'', recurringId:ruleExists ? tx.recurringId : null, rec:false, freq:'monthly', end:'', created:tx.created}
-         : {mode:'tx', quick:!!preset.quick, id:null, type:preset.type||'expense', amount:0, dir:'in', cat:null, date:todayIso(), note:'', recurringId:null, rec:!!preset.rec, freq:'monthly', end:''};
+         : {mode:'tx', quick:!!preset.quick, id:null, type:preset.type||'expense', amount:0, dir:'in', cat:null, date:todayIso(), note:'', recurringId:null, rec:!!preset.rec, freq:'monthly', end:'', dyn:0};
   openSheet(formHtml(), F.type);
   if(!tx && !F.quick){ const a=$('#f-amount'); if(a) a.focus({preventScroll:true}); }
 }
 function openRuleForm(rule, preset={}){
-  F = rule ? {mode:'rule', id:rule.id, type:rule.type, amount:Math.abs(rule.amount), dir:rule.amount<0?'out':'in', cat:rule.cat, date:rule.start, note:rule.note||'', freq:rule.freq, end:rule.end||'', active:rule.active!==false}
-           : {mode:'rule', id:null, type:preset.type||'expense', amount:0, dir:'in', cat:null, date:todayIso(), note:'', freq:'monthly', end:'', active:true};
+  F = rule ? {mode:'rule', id:rule.id, type:rule.type, amount:Math.abs(rule.amount), dir:rule.amount<0?'out':'in', cat:rule.cat, date:rule.start, note:rule.note||'', freq:rule.freq, end:rule.end||'', active:rule.active!==false, dyn:rule.dyn||0, cur:Math.abs(currentAmount(rule))}
+           : {mode:'rule', id:null, type:preset.type||'expense', amount:0, dir:'in', cat:null, date:todayIso(), note:'', freq:'monthly', end:'', active:true, dyn:0};
   openSheet(formHtml(), F.type);
 }
 function readForm(){
@@ -1376,9 +1474,12 @@ async function submitForm(){
       const r = S.settings.recurring.find(x=>x.id===F.id); if(!r){ closeSheet(); return; }
       const wasActive = r.active;
       Object.assign(r, {type:F.type, amount, cat, note:F.note, freq:F.freq, start:F.date, end, active:F.active});
+      if(F.type==='save' && F.dyn) r.dyn = F.dyn; else delete r.dyn;
       if(F.active && !wasActive) r.until = t;
     } else {
-      S.settings.recurring.push({id:newId(), type:F.type, amount, cat, note:F.note, freq:F.freq, start:F.date, end, active:true, until:null});
+      const nr = {id:newId(), type:F.type, amount, cat, note:F.note, freq:F.freq, start:F.date, end, active:true, until:null};
+      if(F.type==='save' && F.dyn) nr.dyn = F.dyn;
+      S.settings.recurring.push(nr);
     }
     closeSheet(); render(); Store.saveSettings(); toast('Gespeichert');
     setTimeout(runRecurring, 900); return;
@@ -1387,7 +1488,9 @@ async function submitForm(){
   let ruleId = F.recurringId;
   if(F.rec && !ruleId){
     ruleId = newId();
-    S.settings.recurring.push({id:ruleId, type:F.type, amount, cat, note:F.note, freq:F.freq, start:F.date, end, active:true, until: (F.id || F.date <= t) ? F.date : null});
+    const nr = {id:ruleId, type:F.type, amount, cat, note:F.note, freq:F.freq, start:F.date, end, active:true, until: (F.id || F.date <= t) ? F.date : null};
+    if(F.type==='save' && F.dyn) nr.dyn = F.dyn;
+    S.settings.recurring.push(nr);
   }
   if(F.rec && F.date > t && !F.id){
     closeSheet(); render(); await Store.saveSettings(); toast(`Wiederkehrende Buchung angelegt, erste am ${dmy(parse(F.date))}`); return;
@@ -1584,6 +1687,7 @@ const A = {
     $('#f-cats').innerHTML = catChips();
     $('#f-dir').hidden = F.type!=='save';
     const cl=$('#f-cat-label'); if(cl) cl.textContent = F.type==='save' ? 'Konto' : 'Kategorie';
+    const db=$('#f-dynbox'); if(db) db.hidden = F.type!=='save';
     const n=$('#f-note'); if(n) n.placeholder = F.type==='expense'?'z. B. Wochenmarkt':F.type==='income'?'z. B. Oktober':'z. B. Sparplan';
   },
   'f-dir'(el){ F.dir = el.dataset.v; el.parentElement.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed', b===el)); },
@@ -1624,6 +1728,7 @@ const A = {
   'acc-save'(){ saveAcc(); },
   quote(el){ const a=accById(el.dataset.id); if(a) fetchQuote(a, el); },
   kp(el){ keypad(el.dataset.k); },
+  'f-dyn'(el){ F.dyn = Number(el.dataset.v) || 0; el.parentElement.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed', b===el)); const pv=$('#f-dynprev'); if(pv) pv.textContent = dynPreview(); },
   'acc-invested'(el){ const a=accById(el.dataset.id); if(a) openAccForm(a, 'invested'); },
   'acc-sym-search'(el){ searchSymbol(el); },
   'acc-sym-pick'(el){ $('#acc-symbol').value = el.dataset.sym; F.symbol = el.dataset.sym; F.cur = el.dataset.cur || ''; $('#acc-sym-results').innerHTML = `<p class="muted" style="margin:8px 0 0;font-size:14px">Ausgewählt: <b>${esc(el.dataset.sym)}</b>${F.cur?` (${esc(F.cur)})`:''}. Zum Übernehmen unten speichern.</p>`; },
@@ -1653,6 +1758,7 @@ document.addEventListener('keydown', e=>{
   if(e.key==='Enter' && F && F.mode==='acc' && Store.ready && e.target && /^acc-/.test(e.target.id || '')){ e.preventDefault(); saveAcc(); }
 });
 document.addEventListener('input', e=>{
+  if(F && e.target.id==='f-amount'){ const pv=$('#f-dynprev'); if(pv) pv.textContent = dynPreview(); }
   if(F && F.mode==='acc'){
     const id=e.target.id;
     if(id==='acc-value') F.dirtyV = true;
