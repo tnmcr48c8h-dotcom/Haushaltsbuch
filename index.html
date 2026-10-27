@@ -398,7 +398,7 @@ details summary{font-size:14.5px}
 
 <script>
 'use strict';
-const APP_VERSION = '1.9';
+const APP_VERSION = '1.9.2';
 /* ---------- Helfer ---------- */
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -480,6 +480,7 @@ function cleanTx(t){
   const amount = cleanAmount(t.type, t.amount); if(amount==null) return null;
   const o = {id:str(t.id,120) || newId(), type:t.type, amount, cat:str(t.cat,60) || FALLBACK[t.type], date:t.date, note:str(t.note,120), created:Number(t.created)||0};
   if(t.recurringId) o.recurringId = str(t.recurringId,80);
+  if(t.type==='income' && typeof t.forMonth==='string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(t.forMonth)) o.forMonth = t.forMonth;
   return o;
 }
 function cleanTxList(list){ const seen=new Set(), out=[]; for(const t of (Array.isArray(list)?list:[])){ const c=cleanTx(t); if(c && !seen.has(c.id)){ seen.add(c.id); out.push(c); } } return out; }
@@ -663,7 +664,9 @@ const shiftOn = () => S.settings.workday !== false;
 // Bezüge im Voraus (Beamte): Eingang ab dem 15. eines Monats zählt für den Folgemonat, z. B. 30.09. → Oktober
 const advCat = cat => { const a = S.settings.adv; return !!(a && a.on && a.cats.includes(cat)); };
 function incomeEff(date, cat){ if(!advCat(cat)) return date; const d = parse(date); return d.getDate() >= 15 ? iso(new Date(d.getFullYear(), d.getMonth()+1, 1, 12)) : date; }
-const effDate = t => t.type==='income' ? incomeEff(t.date, t.cat) : t.date;
+const effDate = t => t.type!=='income' ? t.date : (t.forMonth ? t.forMonth+'-01' : incomeEff(t.date, t.cat));
+const nextMonthKey = d => { const x=parse(d); const n=new Date(x.getFullYear(), x.getMonth()+1, 1, 12); return iso(n).slice(0,7); };
+const monthName = k => `${MONTHS[Number(k.slice(5))-1]} ${k.slice(0,4)}`;
 const ruleBack = r => r.type==='income' && advCat(r.cat);
 function toWorkdayBack(d){ let x=d; for(let i=0; i<10 && !isWorkday(x); i++) x = iso(addDays(parse(x),-1)); return x; }
 // Fälligkeiten: nom = Plantermin, d = tatsächlicher Buchungstag (ggf. nächster Arbeitstag)
@@ -955,7 +958,7 @@ function cmpChipLabel(unit, mode, r){
 function totals(start, end){
   const s=iso(start), e=iso(end); let inc=0, exp=0, sav=0; const byCat={}, bySave={};
   for(const t of S.tx){
-    const dd = t.type==='income' ? incomeEff(t.date, t.cat) : t.date;
+    const dd = effDate(t);
     if(dd<s || dd>e) continue;
     if(t.type==='expense'){ exp+=t.amount; byCat[t.cat]=(byCat[t.cat]||0)+t.amount; }
     else if(t.type==='income') inc+=t.amount;
@@ -974,7 +977,7 @@ let incCache = new Map();
 function monthIncome(y, m){
   const k = y*12+m; if(incCache.has(k)) return incCache.get(k);
   const pre = `${y}-${pad(m+1)}`; let v = 0;
-  for(const t of S.tx) if(t.type==='income' && incomeEff(t.date, t.cat).startsWith(pre)) v += t.amount;
+  for(const t of S.tx) if(t.type==='income' && effDate(t).startsWith(pre)) v += t.amount;
   const end = iso(new Date(y, m+1, 0, 12)), today = todayIso();
   let planned = 0;
   if(end > today) for(const r of S.settings.recurring){
@@ -1104,7 +1107,7 @@ function homeChart(r, mode){
     return {title:'Ausgaben pro Tag', svg:svgBars(items,{aria:'Ausgaben pro Wochentag'}), legend:`<span><i class="k-bar"></i>Diese Woche</span><span><i class="k-ghost"></i>${esc(cmpChipLabel(r.unit,mode,r))}</span><span><i class="k-inc"></i>Einnahmen pro Tag (Ø des Monats)</span>`};
   }
   if(r.unit==='year'){
-    const M = {}, IN = {}; for(const x of S.tx){ const k=x.date.slice(0,7); if(x.type==='expense') M[k]=(M[k]||0)+x.amount; else if(x.type==='income'){ const ki=incomeEff(x.date, x.cat).slice(0,7); IN[ki]=(IN[ki]||0)+x.amount; } }
+    const M = {}, IN = {}; for(const x of S.tx){ const k=x.date.slice(0,7); if(x.type==='expense') M[k]=(M[k]||0)+x.amount; else if(x.type==='income'){ const ki=effDate(x).slice(0,7); IN[ki]=(IN[ki]||0)+x.amount; } }
     const key = (y,m) => `${y}-${pad(m+1)}`, yr = r.start.getFullYear();
     const items=[]; let sumI=0, sumE=0;
     for(let m=0;m<12;m++){
@@ -1119,7 +1122,7 @@ function homeChart(r, mode){
     return {title:'Einnahmen & Ausgaben', svg:svgPairs(items,{aria:'Einnahmen und Ausgaben pro Monat'}), legend, after:note};
   }
   // Monat: Einnahmen und Ausgaben, jeweils aufsummiert bis zum Tag
-  const I = {}; for(const x of S.tx) if(x.type==='income'){ const k=incomeEff(x.date, x.cat); I[k]=(I[k]||0)+x.amount; }
+  const I = {}; for(const x of S.tx) if(x.type==='income'){ const k=effDate(x); I[k]=(I[k]||0)+x.amount; }
   const n = r.end.getDate(), cur=[], inc=[], ref=[]; let acc=0, accI=0;
   for(let i=0;i<n;i++){ const d=addDays(r.start,i); if(iso(d) > t){ cur.push(null); inc.push(null); continue; } acc += E[iso(d)]||0; accI += I[iso(d)]||0; cur.push(acc); inc.push(accI); }
   const len = Math.max(...cmps.map(c=>c.end.getDate()));
@@ -1202,6 +1205,7 @@ function viewHome(){
   h += `</section>`;
 
   // Geldfluss
+  const shiftNote = (()=>{ if(u!=='month') return ''; const ms=iso(r.start), me=iso(r.end); const sh=S.tx.filter(t=>t.type==='income' && t.date>=ms && t.date<=me && effDate(t).slice(0,7)!==t.date.slice(0,7)); if(!sh.length) return ''; const sum=sh.reduce((a,t)=>a+t.amount,0), tgt=effDate(sh[0]).slice(0,7); return `<p class="flow-note">${fmt(sum)} mit Eingang im ${MONTHS[r.start.getMonth()]} ${sh.length===1?'zählt':'zählen'} für ${MONTHS[Number(tgt.slice(5))-1]} (Gehalt im Voraus). Ist das dein ${MONTHS[r.start.getMonth()]}-Gehalt? Dann die Buchung öffnen und bei „Zählt für“ ${MONTHS[r.start.getMonth()]} wählen. <button class="lnk" data-action="show-shifted" data-s="${ms}" data-e="${me}">Buchung zeigen</button></p>`; })();
   const sv=Math.max(cur.sav,0), rest=cur.inc-cur.exp-sv, base=Math.max(cur.inc, cur.exp+sv, 1);
   h += `<div class="flow"><div class="bar" aria-hidden="true"><i class="e" style="width:${cur.exp/base*100}%"></i><i class="s" style="width:${sv/base*100}%"></i>${rest>0?`<i class="r" style="width:${rest/base*100}%"></i>`:''}</div>
     <div class="legend">
@@ -1209,7 +1213,7 @@ function viewHome(){
       <div style="--c:var(--out)"><span>Ausgaben</span><b>${fmt(cur.exp)}</b></div>
       <div style="--c:var(--save)"><span>Gespart</span><b>${fmt(cur.sav)}</b></div>
       ${cur.inc>0 ? `<div style="--c:${rest>=0?'var(--in)':'var(--out)'}"><span>${rest>=0?'Übrig':'Fehlbetrag'}</span><b class="${rest<0?'neg':''}">${fmt(Math.abs(rest))}</b></div>` : ''}
-    </div>${partial ? `<p class="flow-note">Einnahmen anteilig: dein Monatseinkommen gleichmäßig auf die Tage verteilt${incInfo.planned ? ', inklusive noch erwarteter fester Einnahmen' : ''}.</p>` : (cur.inc===0 && (cur.exp||cur.sav) ? `<p class="flow-note">In diesem Zeitraum sind keine Einnahmen erfasst.</p>` : '')}</div>`;
+    </div>${shiftNote}${partial ? `<p class="flow-note">Einnahmen anteilig: dein Monatseinkommen gleichmäßig auf die Tage verteilt${incInfo.planned ? ', inklusive noch erwarteter fester Einnahmen' : ''}.</p>` : (cur.inc===0 && (cur.exp||cur.sav) && !shiftNote ? `<p class="flow-note">In diesem Zeitraum sind keine Einnahmen erfasst.</p>` : '')}</div>`;
 
   // Vergleich
   h += `<div class="cmp"><span>Vergleichen mit</span><div class="chips">${modes.map(m=>`<button class="chip" data-action="cmp" data-v="${m}" aria-pressed="${m===mode}">${esc(cmpChipLabel(u,m,r))}</button>`).join('')}</div></div>`;
@@ -1264,7 +1268,7 @@ function plannedRow(p){
 }
 function txRow(t){
   const c=catOf(t.type,t.cat), rule = t.recurringId ? S.settings.recurring.find(r=>r.id===t.recurringId) : null;
-  const effM = t.type==='income' ? incomeEff(t.date, t.cat).slice(0,7) : t.date.slice(0,7);
+  const effM = effDate(t).slice(0,7);
   const meta = [t.date > todayIso() ? 'geplant' : '', effM !== t.date.slice(0,7) ? `für ${MONTHS[Number(effM.slice(5))-1]}` : '', t.note, rule ? `↻ ${FREQ[rule.freq]||'wiederkehrend'}` : '', t.type==='save' ? (t.amount<0?'Entnahme':'Sparen') : ''].filter(Boolean).join(', ');
   const cls = t.type==='expense' ? 'out' : t.type==='income' ? 'in' : 'sv';
   const amt = t.type==='expense' ? MINUS+fmt(t.amount) : t.type==='income' ? '+'+fmt(t.amount) : signed(t.amount);
@@ -1563,6 +1567,12 @@ function dynPreview(){
   const at = y => fmt(Math.round(base*Math.pow(1+F.dyn, y)));
   return `Startbetrag ${fmt(base)}, steigt jeden Monat um etwa ${m.toFixed(2).replace('.',',')} %: nach 1 Jahr ${at(1)}, nach 5 Jahren ${at(5)}, nach 10 Jahren ${at(10)}.`;
 }
+function advBoxHtml(){
+  if(!F || F.mode==='rule'){ return `<p class="hint">Bezüge im Voraus: Ein Eingang ab dem 15. zählt für den Folgemonat.</p>`; }
+  const d = ($('#f-date') && $('#f-date').value) || F.date || todayIso();
+  const same = d.slice(0,7), next = nextMonthKey(d), auto = incomeEff(d, F.cat).slice(0,7), cur = F.forMonth || auto;
+  return `<span class="flabel">Zählt für</span>${seg('f-for', [[same, monthName(same)],[next, monthName(next)]], cur)}<p class="muted" style="margin:6px 0 0;font-size:13.5px">Bezüge im Voraus: Ein Eingang ab dem 15. zählt automatisch für den Folgemonat. Trägst du dein Gehalt später ein, wähle hier den richtigen Monat.</p>`;
+}
 function formHtml(){
   const isRule = F.mode==='rule', editing = !!F.id;
   const title = isRule ? (editing ? 'Wiederkehrende Buchung' : 'Neue wiederkehrende Buchung') : (editing ? 'Buchung bearbeiten' : 'Neue Buchung');
@@ -1573,7 +1583,7 @@ function formHtml(){
   h += `<div id="f-dir" ${F.type==='save'?'':'hidden'} style="margin-top:12px">${seg('f-dir', [['in','Einzahlen'],['out','Entnehmen']], F.dir)}</div>`;
   h += `<span class="flabel" id="f-cat-label">${F.type==='save' ? 'Konto' : 'Kategorie'}</span><div class="chips" id="f-cats">${catChips()}</div>`;
   if(F.quick) h += `<button class="primary quick-save" data-action="f-save">Speichern</button>`;
-  h += `<p class="hint" id="f-advhint" ${F.type==='income' && advCat(F.cat) ? '' : 'hidden'}>Bezüge im Voraus: Ein Eingang ab dem 15. zählt für den Folgemonat.</p>`;
+  h += `<div id="f-advhint" ${F.mode!=='rule' && F.type==='income' && advCat(F.cat) ? '' : 'hidden'}>${advBoxHtml()}</div>`;
   if(isRule){
     h += `<div class="grid2"><label><span class="flabel">${editing?'Beginnt am':'Erste Fälligkeit'}</span><input id="f-date" class="inp" type="date" value="${esc(F.date)}"></label><label><span class="flabel">Rhythmus</span><select id="f-freq" class="inp">${Object.entries(FREQ).map(([k,v])=>`<option value="${k}" ${k===F.freq?'selected':''}>${v}</option>`).join('')}</select></label></div>`;
     h += `<label><span class="flabel">Endet am (optional)</span><input id="f-end" class="inp" type="date" value="${esc(F.end||'')}"></label>`;
@@ -1611,7 +1621,7 @@ function keypad(k){
 }
 function openTxForm(tx, preset={}){
   const ruleExists = tx && tx.recurringId && S.settings.recurring.some(r=>r.id===tx.recurringId);
-  F = tx ? {mode:'tx', quick:false, id:tx.id, type:tx.type, amount:Math.abs(tx.amount), dir:tx.amount<0?'out':'in', cat:tx.cat, date:tx.date, note:tx.note||'', recurringId:ruleExists ? tx.recurringId : null, rec:false, freq:'monthly', end:'', created:tx.created}
+  F = tx ? {mode:'tx', quick:false, forMonth:tx.forMonth||null, id:tx.id, type:tx.type, amount:Math.abs(tx.amount), dir:tx.amount<0?'out':'in', cat:tx.cat, date:tx.date, note:tx.note||'', recurringId:ruleExists ? tx.recurringId : null, rec:false, freq:'monthly', end:'', created:tx.created}
          : {mode:'tx', quick:!!preset.quick, id:null, type:preset.type||'expense', amount:0, dir:'in', cat:preset.cat||null, date:todayIso(), note:'', recurringId:null, rec:!!preset.rec, freq:'monthly', end:'', dyn:0};
   openSheet(formHtml(), F.type);
   if(!tx && !F.quick){ const a=$('#f-amount'); if(a) a.focus({preventScroll:true}); }
@@ -1670,6 +1680,7 @@ async function submitForm(){
     return;
   }
   const tx = {id: F.id || (ruleId && F.rec ? `r-${ruleId}-${F.date}` : newId()), type:F.type, amount, cat, date:F.date, note:F.note, created:F.created||Date.now()};
+  if(F.type==='income' && advCat(cat) && F.forMonth && F.forMonth !== incomeEff(F.date, cat).slice(0,7)) tx.forMonth = F.forMonth;
   if(ruleId) tx.recurringId = ruleId;
   const i = S.tx.findIndex(x=>x.id===tx.id); if(i>=0) S.tx[i]=tx; else S.tx.push(tx);
   sortTx();
@@ -1867,11 +1878,12 @@ const A = {
     const cl=$('#f-cat-label'); if(cl) cl.textContent = F.type==='save' ? 'Konto' : 'Kategorie';
     const db=$('#f-dynbox'); if(db) db.hidden = F.type!=='save';
     const ah=$('#f-advhint'); if(ah) ah.hidden = true;
+    F.forMonth = null;
     const n=$('#f-note'); if(n) n.placeholder = F.type==='expense'?'z. B. Wochenmarkt':F.type==='income'?'z. B. Oktober':'z. B. Sparplan';
   },
   'f-dir'(el){ F.dir = el.dataset.v; el.parentElement.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed', b===el)); },
-  'f-cat'(el){ F.cat = F.cat===el.dataset.v ? null : el.dataset.v; const ah=$('#f-advhint'); if(ah) ah.hidden = !(F.type==='income' && advCat(F.cat)); $('#f-cats').querySelectorAll('.chip').forEach(b=>b.setAttribute('aria-pressed', b.dataset.v===F.cat)); },
-  'f-day'(el){ $('#f-date').value = iso(addDays(todayDate(), Number(el.dataset.v))); },
+  'f-cat'(el){ F.cat = F.cat===el.dataset.v ? null : el.dataset.v; const ah=$('#f-advhint'); if(ah){ ah.hidden = !(F.type==='income' && advCat(F.cat)); if(!ah.hidden) ah.innerHTML = advBoxHtml(); } $('#f-cats').querySelectorAll('.chip').forEach(b=>b.setAttribute('aria-pressed', b.dataset.v===F.cat)); },
+  'f-day'(el){ $('#f-date').value = iso(addDays(todayDate(), Number(el.dataset.v))); if(F){ F.forMonth = null; const ah=$('#f-advhint'); if(ah && !ah.hidden) ah.innerHTML = advBoxHtml(); } },
   'f-save'(){ submitForm(); },
   'f-delete'(el){ deleteFromForm(el); },
   settings(){ openSettings(); },
@@ -1909,6 +1921,8 @@ const A = {
   'acc-save'(){ saveAcc(); },
   quote(el){ const a=accById(el.dataset.id); if(a) fetchQuote(a, el); },
   kp(el){ keypad(el.dataset.k); },
+  'show-shifted'(el){ S.ui.f = {type:'income', cat:null, catType:null, range:{s:el.dataset.s, e:el.dataset.e, label:shortLabel(rangeFor('month', parse(el.dataset.s)))}, q:''}; S.ui.view='list'; S.ui.limit=150; render(); window.scrollTo(0,0); },
+  'f-for'(el){ const d = ($('#f-date') && $('#f-date').value) || F.date; const auto = incomeEff(d, F.cat).slice(0,7); F.forMonth = el.dataset.v===auto ? null : el.dataset.v; el.parentElement.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed', b===el)); },
   'adv-cat'(el){ const a = S.settings.adv; if(!a) return; const id = el.dataset.id; a.cats = a.cats.includes(id) ? a.cats.filter(x=>x!==id) : [...a.cats, id]; Store.saveSettings(); refreshSettings(); render(); },
   'dev-range'(el){ S.ui.devRange = el.dataset.v; render(); },
   'dev-mode'(el){ S.ui.devMode = el.dataset.v; render(); },
@@ -1957,6 +1971,7 @@ document.addEventListener('input', e=>{
   if(e.target.id==='q'){ S.ui.f.q = e.target.value; S.ui.limit=150; const l=$('#txlist'); if(l) l.innerHTML = txListHtml(); }
 });
 document.addEventListener('change', e=>{
+  if(e.target.id==='f-date' && F && F.mode!=='rule'){ F.forMonth = null; const ah=$('#f-advhint'); if(ah && !ah.hidden) ah.innerHTML = advBoxHtml(); }
   if(e.target.id==='f-rec' && F){ F.rec = e.target.checked; $('#f-recopts').hidden = !F.rec; }
   if(e.target.id==='adv-on'){ const a = S.settings.adv || {on:false, cats:['gehalt']}; a.on = e.target.checked; if(a.on && !a.cats.length) a.cats=['gehalt']; S.settings.adv = a; Store.saveSettings(); refreshSettings(); render(); toast(a.on ? 'Bezüge zählen jetzt für den Folgemonat' : 'Einnahmen zählen wieder im Monat des Eingangs'); }
   if(e.target.id==='wd-on'){ S.settings.workday = e.target.checked; Store.saveSettings(); render(); toast(e.target.checked ? 'Buchungen fallen jetzt auf Arbeitstage' : 'Buchungen fallen auf den Plantermin'); }
