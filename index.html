@@ -256,6 +256,10 @@ select.inp{-webkit-appearance:none;appearance:none;padding-right:34px;background
 .sheet.open{transform:none}
 .sheet[data-type="income"]{--c:var(--in)}
 .sheet[data-type="save"]{--c:var(--save)}
+.sheet[data-type="etf"]{--c:var(--etf)}
+.kind-badge{display:inline-block;padding:5px 12px;border-radius:999px;font-weight:700;font-size:14.5px}
+.kind-badge.kind-cash{background:var(--save-soft);color:var(--save)}
+.kind-badge.kind-etf{background:var(--etf-soft);color:var(--etf)}
 @media (prefers-reduced-motion: reduce){.sheet,.scrim{transition:none}}
 .grab{width:40px;height:5px;border-radius:3px;background:var(--line);margin:4px auto 10px}
 .sheet-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
@@ -378,7 +382,7 @@ details summary{font-size:14.5px}
 
 <script>
 'use strict';
-const APP_VERSION = '1.7';
+const APP_VERSION = '1.7.1';
 /* ---------- Helfer ---------- */
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -480,6 +484,9 @@ function thinSnaps(list){
 const cleanSymbol = v => String(v||'').toUpperCase().replace(/[^A-Z0-9.\-]/g,'').slice(0,20);
 function cleanAcc(c, id){
   const o = {kind: (c.kind==='etf' || c.kind==='cash') ? c.kind : (id==='etf' ? 'etf' : 'cash')};
+  // Versehentlich umgestellte Standardkonten zurücksetzen (Kontoart ist seit 1.7.1 nicht mehr umschaltbar)
+  if(id==='tagesgeld' && o.kind==='etf' && /tagesgeld/i.test(String(c.name||''))){ o.kind='cash'; c = {...c, symbol:'', cur:'', base:null, isin:''}; }
+  if(id==='etf' && o.kind==='cash' && /etf|depot/i.test(String(c.name||''))) o.kind='etf';
   if(c.isin){ const i=String(c.isin).toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,12); if(i) o.isin=i; }
   if(c.symbol){ const y=cleanSymbol(c.symbol); if(y) o.symbol=y; }
   if(c.cur && /^[A-Z]{3}$/.test(String(c.cur))) o.cur=String(c.cur);
@@ -1347,9 +1354,10 @@ function viewSave(){
 /* ---------- Sparkonto bearbeiten / Stand eintragen ---------- */
 function accFormHtml(){
   const etf = F.kind==='etf', editing=!!F.id, a = editing ? accById(F.id) : null;
-  let h = `<div class="sheet-head"><h2>${editing ? 'Sparkonto' : 'Neues Sparkonto'}</h2><button class="icon-btn" data-action="close" aria-label="Schließen">${ICON.close}</button></div>`;
+  let h = `<div class="sheet-head"><h2>${editing ? esc(a.name) : 'Neues Sparkonto'}</h2><button class="icon-btn" data-action="close" aria-label="Schließen">${ICON.close}</button></div>`;
   h += `<span class="flabel">Name</span><div class="row"><input id="acc-icon" class="inp emoji-inp" maxlength="8" value="${esc(F.icon)}" aria-label="Symbol"><input id="acc-name" class="inp" maxlength="30" placeholder="z. B. Tagesgeld" value="${esc(F.name)}" aria-label="Name"></div>`;
-  h += `<span class="flabel">Art</span>${seg('acc-kind', [['cash','Tagesgeld / Konto'],['etf','ETF / Depot']], F.kind)}`;
+  if(editing) h += `<span class="flabel">Art</span><span class="kind-badge kind-${etf?'etf':'cash'}">${etf ? 'ETF / Depot' : 'Tagesgeld / Konto'}</span>`;
+  else h += `<span class="flabel">Art</span>${seg('acc-kind', [['cash','Tagesgeld / Konto'],['etf','ETF / Depot']], F.kind)}<p class="muted" style="margin:6px 0 0;font-size:13.5px">Die Art legst du beim Anlegen einmal fest.</p>`;
   h += `<div id="acc-etf" ${etf?'':'hidden'}><label><span class="flabel">ISIN (optional)</span><input id="acc-isin" class="inp" maxlength="12" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="z. B. IE00…" value="${esc(F.isin)}"></label>`;
   if(quoteCfg().on) h += `<span class="flabel">Börsenkürzel für den Kursabruf</span><div class="row"><input id="acc-symbol" class="inp" maxlength="20" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="z. B. SPYI.DEX" value="${esc(F.symbol)}"><button class="btn" data-action="acc-sym-search">Suchen</button></div><p class="muted" style="margin:6px 0 0;font-size:13.5px">XETRA-Kürzel enden auf .DEX. Kurse in Euro wählen.${F.cur ? ` Aktuell: ${esc(F.cur)}.` : ''}</p><div id="acc-sym-results"></div>`;
   h += `</div>`;
@@ -1372,13 +1380,14 @@ function openAccForm(a, focus){
   const sb = a ? sharesBase(a, todayIso()) : null;
   F = {mode:'acc', id:a ? a.id : null, name:a ? a.name : '', icon:a ? a.icon : '🏦', kind:a ? (a.kind||'cash') : 'cash', isin:a && a.isin || '', symbol:a && a.symbol || '', cur:a && a.cur || '', date:todayIso(),
        value: st ? st.value : null, invested: st ? st.invested : null, shares: sb ? sb.shares : '', dirtyV:false, dirtyI:false, dirtyS:false};
-  openSheet(accFormHtml(), 'save');
+  openSheet(accFormHtml(), F.kind==='etf' ? 'etf' : 'save');
   const id = focus==='shares' ? 'acc-shares' : focus==='symbol' ? 'acc-symbol' : focus==='invested' ? 'acc-invested' : focus ? 'acc-value' : null;
   const el = id && $('#'+id);
   if(el){ el.focus({preventScroll:true}); try{ el.select(); }catch(e){} el.scrollIntoView({block:'center'}); }
 }
 function saveAcc(){
   if(!F || F.mode!=='acc') return;
+  if(F.id){ const ex = accById(F.id); if(ex) F.kind = ex.kind==='etf' ? 'etf' : 'cash'; }
   const etf = F.kind==='etf';
   const name = $('#acc-name').value.trim().slice(0,30) || (etf ? 'ETF-Depot' : 'Tagesgeld');
   const icon = firstChars($('#acc-icon').value.trim(),2) || (etf ? '📈' : '🏦');
@@ -1793,6 +1802,8 @@ const A = {
   'acc-edit'(el){ const a=accById(el.dataset.id); if(a) openAccForm(a); },
   'acc-update'(el){ const a=accById(el.dataset.id); if(a) openAccForm(a, true); },
   'acc-kind'(el){
+    if(!F || F.mode!=='acc' || F.id) return;
+    $('#sheet').dataset.type = el.dataset.v==='etf' ? 'etf' : 'save';
     F.kind = el.dataset.v; const etf = F.kind==='etf';
     el.parentElement.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed', b===el));
     $('#acc-etf').hidden = !etf; $('#acc-calc').hidden = !etf; $('#acc-inv').hidden = !etf;
