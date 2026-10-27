@@ -164,6 +164,22 @@ select.inp{-webkit-appearance:none;appearance:none;padding-right:34px;background
 .lnk-row{display:flex;flex-wrap:wrap;gap:4px 18px;margin-top:8px}
 .lnk{border:0;background:none;padding:6px 0;color:var(--accent);font-weight:700;font-size:14.5px}
 .tx.planned .c .tag{margin-left:4px}
+.dev-seg button{min-width:0;padding:7px 1px;font-size:12.5px;overflow:hidden;text-overflow:clip;white-space:nowrap}
+.dev-seg .s{display:none}
+@media (max-width:350px){ .dev-seg .l{display:none} .dev-seg .s{display:inline} .dev-seg button{font-size:13.5px} }
+.dev-row{padding:10px 0 2px;border-bottom:1px solid var(--line)}
+.dev-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.dev-top span{display:flex;align-items:center;gap:7px;font-weight:700;min-width:0}
+.dev-top span i{width:10px;height:10px;border-radius:3px;flex:none}
+.dev-top b{font:700 18px var(--f-display);font-variant-numeric:tabular-nums;white-space:nowrap}
+.dev-sub{font-size:14px;color:var(--muted);margin-top:2px}
+.dev-sub b{color:var(--ink);font-variant-numeric:tabular-nums}
+.dev-sub b.gain{color:var(--in)}
+.dev-sub b.loss{color:var(--out)}
+.dev-price .lnk{padding:0 0 0 6px;font-size:14px}
+.dev-foot{display:flex;justify-content:flex-end;margin-top:6px}
+.dev-mode{width:150px}
+.dev-mode button{font-size:13.5px;padding:6px 4px}
 .chart .l-inc{fill:none;stroke:var(--in);stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round}
 .chart .dot.in{fill:var(--in)}
 .chart-legend .lv{color:var(--ink);font-variant-numeric:tabular-nums}
@@ -382,7 +398,7 @@ details summary{font-size:14.5px}
 
 <script>
 'use strict';
-const APP_VERSION = '1.7.1';
+const APP_VERSION = '1.9';
 /* ---------- Helfer ---------- */
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -449,7 +465,7 @@ const FREQ = {weekly:'wöchentlich', monthly:'monatlich', quarterly:'vierteljäh
 const FREQ_FACTOR = {weekly:52/12, monthly:1, quarterly:1/3, halfyearly:1/6, yearly:1/12};
 const DYN_OPTS = [0.02, 0.03, 0.05];
 
-function defaultSettings(){ const c={}; for(const k in DEFAULT_CATS) c[k]=DEFAULT_CATS[k].map(([id,name,icon])=>k==='save' ? {id,name,icon,kind:id==='etf'?'etf':'cash',snaps:[]} : {id,name,icon}); return {v:2, categories:c, recurring:[], workday:true}; }
+function defaultSettings(){ const c={}; for(const k in DEFAULT_CATS) c[k]=DEFAULT_CATS[k].map(([id,name,icon])=>k==='save' ? {id,name,icon,kind:id==='etf'?'etf':'cash',snaps:[]} : {id,name,icon}); return {v:2, categories:c, recurring:[], workday:true, adv:{on:true, cats:['gehalt']}}; }
 const TYPES = ['expense','income','save'];
 const isDate = v => typeof v==='string' && /^\d{4}-\d{2}-\d{2}$/.test(v) && iso(parse(v))===v;
 const str = (v,n) => String(v==null ? '' : v).slice(0,n);
@@ -509,6 +525,8 @@ function cleanAcc(c, id){
 }
 function normalizeSettings(d){
   const def = defaultSettings(), out = {v:2, categories:{}, recurring:[], workday: !(d && d.workday===false)};
+  const sa = d && d.adv && typeof d.adv==='object' ? d.adv : null;
+  out.adv = sa ? {on: sa.on!==false, cats: (Array.isArray(sa.cats) ? sa.cats : []).map(x=>str(x,60)).filter(Boolean).slice(0,20)} : {on:true, cats:['gehalt']};
   const src = (d && typeof d==='object') ? d : {};
   for(const k of TYPES){
     const list = src.categories && Array.isArray(src.categories[k]) ? src.categories[k] : def.categories[k];
@@ -525,7 +543,7 @@ const visibleCats = type => (S.settings.categories[type]||[]).filter(c=>!c.hidde
 
 const S = {
   tx: [], settings: defaultSettings(), meta: {lastBackup:0},
-  ui: { view:'home', unit:'month', anchor: todayDate(), cmp:'prev', f:{type:'all', cat:null, catType:null, range:null, q:''}, limit:150 }
+  ui: { view:'home', unit:'month', anchor: todayDate(), cmp:'prev', devRange:'1M', devMode:'eur', f:{type:'all', cat:null, catType:null, range:null, q:''}, limit:150 }
 };
 const sortTx = () => S.tx.sort((a,b)=> a.date<b.date ? 1 : a.date>b.date ? -1 : (b.created||0)-(a.created||0));
 
@@ -642,25 +660,31 @@ function holidaysBW(y){
 const isWorkday = d => { const x=parse(d), wd=x.getDay(); return wd!==0 && wd!==6 && !holidaysBW(x.getFullYear()).has(d); };
 function toWorkday(d){ let x=d; for(let i=0; i<10 && !isWorkday(x); i++) x = iso(addDays(parse(x),1)); return x; }
 const shiftOn = () => S.settings.workday !== false;
+// Bezüge im Voraus (Beamte): Eingang ab dem 15. eines Monats zählt für den Folgemonat, z. B. 30.09. → Oktober
+const advCat = cat => { const a = S.settings.adv; return !!(a && a.on && a.cats.includes(cat)); };
+function incomeEff(date, cat){ if(!advCat(cat)) return date; const d = parse(date); return d.getDate() >= 15 ? iso(new Date(d.getFullYear(), d.getMonth()+1, 1, 12)) : date; }
+const effDate = t => t.type==='income' ? incomeEff(t.date, t.cat) : t.date;
+const ruleBack = r => r.type==='income' && advCat(r.cat);
+function toWorkdayBack(d){ let x=d; for(let i=0; i<10 && !isWorkday(x); i++) x = iso(addDays(parse(x),-1)); return x; }
 // Fälligkeiten: nom = Plantermin, d = tatsächlicher Buchungstag (ggf. nächster Arbeitstag)
 function occurrencesN(rule, afterIso, uptoIso){
-  const out=[], sh=shiftOn();
+  const out=[], sh=shiftOn(), back=sh && ruleBack(rule), limit = back ? iso(addDays(parse(uptoIso), 10)) : uptoIso;
   for(let n=0; n<2000; n++){
     const nom = iso(nth(rule,n));
-    if(nom > uptoIso) break;
+    if(nom > limit) break;
     if(rule.end && nom > rule.end) break;
-    const d = sh ? toWorkday(nom) : nom;
+    const d = !sh ? nom : back ? toWorkdayBack(nom) : toWorkday(nom);
     if(d > afterIso && d <= uptoIso) out.push({d, nom});
   }
   return out;
 }
 const occurrences = (rule, a, u) => occurrencesN(rule, a, u).map(o=>o.d);
 function nextDueN(rule){
-  const t = todayIso(), sh=shiftOn();
+  const t = todayIso(), sh=shiftOn(), back=sh && ruleBack(rule);
   for(let n=0; n<2000; n++){
     const nom = iso(nth(rule,n));
     if(rule.end && nom > rule.end) return null;
-    const d = sh ? toWorkday(nom) : nom;
+    const d = !sh ? nom : back ? toWorkdayBack(nom) : toWorkday(nom);
     if(d > t) return {d, nom};
   }
   return null;
@@ -712,6 +736,38 @@ function lastSnap(a, d){ const s=a.snaps||[]; for(let i=s.length-1;i>=0;i--) if(
 function investedAt(a, d, list){ const b = a.base && a.base.date<=d ? a.base : null; let v=b ? b.invested : 0; for(const t of list) if(t.date<=d && afterMark(t,b)) v+=t.amount; return v; }
 function valueAt(a, d, list){ const sn=lastSnap(a,d); if(!sn) return investedAt(a,d,list); let v=sn.value; for(const t of list) if(t.date<=d && afterMark(t,sn)) v+=t.amount; return v; }
 // Für die Verlaufsgrafik: vor dem ersten eingetragenen Stand aus diesem zurückrechnen (abzüglich der Buchungen dazwischen)
+const DEV_RANGES = [['1D','Tag','1T'],['1W','Woche','1W'],['1M','Monat','1M'],['3M','3 Mon.','3M'],['1Y','Jahr','1J'],['MAX','Max','Max']];
+// Zeitpunkte für den gewählten Zeitraum; beginnt frühestens mit den ersten erfassten Daten
+function devPoints(range, firstData){
+  const t = todayDate(), ti = iso(t);
+  let start = range==='1D' ? addDays(t,-1) : range==='1W' ? addDays(t,-7) : range==='1M' ? addMonths(t,-1) : range==='3M' ? addMonths(t,-3) : range==='1Y' ? addMonths(t,-12) : parse(firstData);
+  let s = iso(start), clamped = false;
+  if(s < firstData){ s = firstData; clamped = true; }
+  const span = daysBetween(parse(s), t), step = span <= 100 ? 1 : span <= 450 ? 7 : 30;
+  const pts = []; for(let d=parse(s); iso(d) < ti; d=addDays(d, step)) pts.push(iso(d));
+  pts.push(ti);
+  return {pts, start:s, clamped};
+}
+// Wert (inkl. Einzahlungen) und Rendite (ohne Einzahlungen) je Kontoart über die Zeitpunkte
+function devSeries(rows, pts){
+  const res = {};
+  for(const kind of ['cash','etf']){
+    const rs = rows.filter(r => (isEtf(r.a) ? 'etf' : 'cash')===kind);
+    if(!rs.length) continue;
+    const vals = pts.map(d => rs.reduce((s,r)=>s+Math.max(0, chartValueAt(r.a, d, r.list)), 0));
+    const dep = pts.map(d => rs.reduce((s,r)=>s+r.list.filter(x=>x.date > pts[0] && x.date <= d).reduce((a,x)=>a+x.amount,0), 0));
+    const v0 = vals[0];
+    const perf = vals.map((v,i)=>{ const base = v0 + dep[i]; return base > 0 ? (v - v0 - dep[i]) / base : 0; });
+    const last = vals.length-1;
+    res[kind] = {vals, perf, change: vals[last]-v0, gain: vals[last]-v0-dep[last], pct: perf[last], deposits: dep[last], now: vals[last]};
+  }
+  return res;
+}
+function latestPrice(rows){
+  let best = null;
+  for(const r of rows) if(isEtf(r.a)) for(const sn of (r.a.snaps||[])) if(sn.price && (!best || sn.date >= best.date)) best = {...sn, acc:r.a};
+  return best;
+}
 function chartValueAt(a, d, list){
   const first = (a.snaps||[])[0];
   if(first && d < first.date){ let v = first.value; for(const t of list) if(t.date > d && !afterMark(t, first)) v -= t.amount; return v; }
@@ -899,7 +955,8 @@ function cmpChipLabel(unit, mode, r){
 function totals(start, end){
   const s=iso(start), e=iso(end); let inc=0, exp=0, sav=0; const byCat={}, bySave={};
   for(const t of S.tx){
-    if(t.date<s || t.date>e) continue;
+    const dd = t.type==='income' ? incomeEff(t.date, t.cat) : t.date;
+    if(dd<s || dd>e) continue;
     if(t.type==='expense'){ exp+=t.amount; byCat[t.cat]=(byCat[t.cat]||0)+t.amount; }
     else if(t.type==='income') inc+=t.amount;
     else { sav+=t.amount; bySave[t.cat]=(bySave[t.cat]||0)+t.amount; }
@@ -917,13 +974,13 @@ let incCache = new Map();
 function monthIncome(y, m){
   const k = y*12+m; if(incCache.has(k)) return incCache.get(k);
   const pre = `${y}-${pad(m+1)}`; let v = 0;
-  for(const t of S.tx) if(t.type==='income' && t.date.startsWith(pre)) v += t.amount;
+  for(const t of S.tx) if(t.type==='income' && incomeEff(t.date, t.cat).startsWith(pre)) v += t.amount;
   const end = iso(new Date(y, m+1, 0, 12)), today = todayIso();
   let planned = 0;
   if(end > today) for(const r of S.settings.recurring){
     if(!r.active || r.type!=='income') continue;
-    const from = [today, r.until||'', iso(new Date(y, m, 0, 12))].sort().pop();
-    for(const o of occurrencesN(r, from, end)) planned += amountAt(r, o.nom);
+    const from = [today, r.until||''].sort().pop();
+    for(const o of occurrencesN(r, from, end)) if(incomeEff(o.d, r.cat).startsWith(pre)) planned += amountAt(r, o.nom);
   }
   const res = {v: v+planned, planned}; incCache.set(k, res); return res;
 }
@@ -989,6 +1046,29 @@ function svgStack(n, layers, opts={}){
   for(const l of (opts.xLabels||[])) g += `<text class="axis" x="${x(l.i).toFixed(1)}" y="${H-5}" text-anchor="${l.i===0?'start':l.i===n-1?'end':'middle'}">${esc(l.t)}</text>`;
   return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(opts.aria||'Gestapeltes Flächendiagramm')}">${g}</svg>`;
 }
+function svgDev(n, series, opts={}){
+  const W=340, H=184, top=20, bot=22, left=2, right=8;
+  const all = series.flatMap(s=>s.vals);
+  let lo = Math.min(0, ...all), hi = Math.max(...all);
+  if(opts.pct){ const mn = Math.min(...all), pad = Math.max((hi-Math.min(0,mn))*0.15, 0.002); lo = mn < 0 ? mn - pad : 0; hi = Math.max(hi, 0) + pad; }
+  else { hi = niceMax(Math.max(1, hi)); lo = 0; }
+  if(hi - lo < 1e-9) hi = lo + 1;
+  const x = i => left + (W-left-right) * (n<=1 ? 0 : i/(n-1));
+  const y = v => top + (H-top-bot) * (1 - (v-lo)/(hi-lo));
+  const lab = v => opts.pct ? fmtPct(v, Math.abs(hi-lo) < 0.05 ? 2 : 1) : fmt0(v);
+  let g = `<line class="grid" x1="0" x2="${W}" y1="${y(hi).toFixed(1)}" y2="${y(hi).toFixed(1)}"/><text class="axis" x="0" y="${(y(hi)-5).toFixed(1)}">${lab(hi)}</text>`;
+  g += `<line class="base" x1="0" x2="${W}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}"/>`;
+  if(opts.pct && lo < 0) g += `<text class="axis" x="0" y="${(y(lo)-3).toFixed(1)}">${lab(lo)}</text>`;
+  for(const s of series){
+    const pts = s.vals.map((v,i)=>[x(i), y(v)]);
+    const d = pts.map((p,i)=>`${i?'L':'M'}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join('');
+    if(s.area) g += `<path class="${s.area}" d="${d}L${pts[pts.length-1][0].toFixed(1)} ${y(Math.max(lo,0)).toFixed(1)}L${pts[0][0].toFixed(1)} ${y(Math.max(lo,0)).toFixed(1)}Z"/>`;
+    g += `<path class="${s.cls}" d="${d}"/>`;
+    const p = pts[pts.length-1]; g += `<circle class="dot ${s.dot}" cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="4.5"/>`;
+  }
+  for(const l of (opts.xLabels||[])) g += `<text class="axis" x="${x(l.i).toFixed(1)}" y="${H-5}" text-anchor="${l.i===0?'start':l.i===n-1?'end':'middle'}">${esc(l.t)}</text>`;
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(opts.aria||'Entwicklung')}">${g}</svg>`;
+}
 function svgLines(n, series, opts={}){
   const W=340, H=168, top=20, bot=22, left=2, right=10;
   const all = series.flatMap(s=>s.vals.filter(v=>v!=null));
@@ -1024,7 +1104,7 @@ function homeChart(r, mode){
     return {title:'Ausgaben pro Tag', svg:svgBars(items,{aria:'Ausgaben pro Wochentag'}), legend:`<span><i class="k-bar"></i>Diese Woche</span><span><i class="k-ghost"></i>${esc(cmpChipLabel(r.unit,mode,r))}</span><span><i class="k-inc"></i>Einnahmen pro Tag (Ø des Monats)</span>`};
   }
   if(r.unit==='year'){
-    const M = {}, IN = {}; for(const x of S.tx){ const k=x.date.slice(0,7); if(x.type==='expense') M[k]=(M[k]||0)+x.amount; else if(x.type==='income') IN[k]=(IN[k]||0)+x.amount; }
+    const M = {}, IN = {}; for(const x of S.tx){ const k=x.date.slice(0,7); if(x.type==='expense') M[k]=(M[k]||0)+x.amount; else if(x.type==='income'){ const ki=incomeEff(x.date, x.cat).slice(0,7); IN[ki]=(IN[ki]||0)+x.amount; } }
     const key = (y,m) => `${y}-${pad(m+1)}`, yr = r.start.getFullYear();
     const items=[]; let sumI=0, sumE=0;
     for(let m=0;m<12;m++){
@@ -1039,7 +1119,7 @@ function homeChart(r, mode){
     return {title:'Einnahmen & Ausgaben', svg:svgPairs(items,{aria:'Einnahmen und Ausgaben pro Monat'}), legend, after:note};
   }
   // Monat: Einnahmen und Ausgaben, jeweils aufsummiert bis zum Tag
-  const I = {}; for(const x of S.tx) if(x.type==='income') I[x.date]=(I[x.date]||0)+x.amount;
+  const I = {}; for(const x of S.tx) if(x.type==='income'){ const k=incomeEff(x.date, x.cat); I[k]=(I[k]||0)+x.amount; }
   const n = r.end.getDate(), cur=[], inc=[], ref=[]; let acc=0, accI=0;
   for(let i=0;i<n;i++){ const d=addDays(r.start,i); if(iso(d) > t){ cur.push(null); inc.push(null); continue; } acc += E[iso(d)]||0; accI += I[iso(d)]||0; cur.push(acc); inc.push(accI); }
   const len = Math.max(...cmps.map(c=>c.end.getDate()));
@@ -1176,14 +1256,16 @@ function plannedItems(days, filter){
 function plannedRow(p){
   const c = catOf(p.type, p.cat), d = parse(p.date);
   const when = `${WD[d.getDay()]} ${dm(d)}`;
-  const meta = [when, p.note, p.kind==='rule' ? `↻ ${FREQ[p.freq]}` : 'einmalig', p.nom && p.nom!==p.date ? `verschoben vom ${dm(parse(p.nom))}` : ''].filter(Boolean).join(', ');
+  const pe = p.type==='income' ? incomeEff(p.date, p.cat).slice(0,7) : p.date.slice(0,7);
+  const meta = [when, pe !== p.date.slice(0,7) ? `für ${MONTHS[Number(pe.slice(5))-1]}` : '', p.note, p.kind==='rule' ? `↻ ${FREQ[p.freq]}` : 'einmalig', p.nom && p.nom!==p.date ? `${p.nom > p.date ? 'vorgezogen' : 'verschoben'} vom ${dm(parse(p.nom))}` : ''].filter(Boolean).join(', ');
   const cls = p.type==='expense' ? 'out' : p.type==='income' ? 'in' : 'sv';
   const amt = p.type==='expense' ? MINUS+fmt(p.amount) : p.type==='income' ? '+'+fmt(p.amount) : signed(p.amount);
   return `<button class="tx planned" data-action="${p.kind==='rule'?'edit-rule':'edit-tx'}" data-id="${esc(p.id)}"><span class="ic">${esc(c.icon)}</span><span class="m"><span class="c">${esc(c.name)} <span class="tag">geplant</span></span><span class="n">${esc(meta)}</span></span><span class="amt ${cls}">${amt}</span></button>`;
 }
 function txRow(t){
   const c=catOf(t.type,t.cat), rule = t.recurringId ? S.settings.recurring.find(r=>r.id===t.recurringId) : null;
-  const meta = [t.date > todayIso() ? 'geplant' : '', t.note, rule ? `↻ ${FREQ[rule.freq]||'wiederkehrend'}` : '', t.type==='save' ? (t.amount<0?'Entnahme':'Sparen') : ''].filter(Boolean).join(', ');
+  const effM = t.type==='income' ? incomeEff(t.date, t.cat).slice(0,7) : t.date.slice(0,7);
+  const meta = [t.date > todayIso() ? 'geplant' : '', effM !== t.date.slice(0,7) ? `für ${MONTHS[Number(effM.slice(5))-1]}` : '', t.note, rule ? `↻ ${FREQ[rule.freq]||'wiederkehrend'}` : '', t.type==='save' ? (t.amount<0?'Entnahme':'Sparen') : ''].filter(Boolean).join(', ');
   const cls = t.type==='expense' ? 'out' : t.type==='income' ? 'in' : 'sv';
   const amt = t.type==='expense' ? MINUS+fmt(t.amount) : t.type==='income' ? '+'+fmt(t.amount) : signed(t.amount);
   return `<button class="tx" data-action="edit-tx" data-id="${esc(t.id)}"><span class="ic">${esc(c.icon)}</span><span class="m"><span class="c">${esc(c.name)}</span>${meta?`<span class="n">${esc(meta)}</span>`:''}</span><span class="amt ${cls}">${amt}</span></button>`;
@@ -1322,33 +1404,43 @@ function viewSave(){
   const mr=rangeFor('month',t), m=totals(mr.start, mr.end), yr=rangeFor('year',t), y=totals(yr.start, yr.end);
   const rate = m.inc>0 ? Math.round(m.sav/m.inc*100) : null;
   h += `<section class="sec"><div class="sec-h"><h2>Sparleistung</h2></div><div class="panel"><div class="kpis"><div><span>Im ${MONTHS[t.getMonth()]}</span><b>${fmt(m.sav)}</b></div><div><span>Sparquote ${MONTHS[t.getMonth()]}</span><b>${rate==null?'–':rate+' %'}</b></div><div><span>Seit Jahresbeginn</span><b>${fmt(y.sav)}</b></div><div><span>Ø pro Monat ${t.getFullYear()}</span><b>${fmt(Math.round(y.sav/(t.getMonth()+1)))}</b></div></div></div></section>`;
-  // Entwicklung, getrennt nach Tagesgeld/Konten und ETF/Depot, gestapelt.
-  // Beginnt mit dem ersten erfassten Stand; vor dem ersten Stand eines Kontos wird aus diesem Stand zurückgerechnet (statt 0 €).
+  // Entwicklung: ein Diagramm für Tagesgeld & Konten und ETF & Depot, mit Zeitraum und € / %
   const firsts = []; for(const r of main){ if(r.a.snaps && r.a.snaps.length) firsts.push(r.a.snaps[0].date); if(r.list.length) firsts.push(r.list[r.list.length-1].date); if(r.a.base) firsts.push(r.a.base.date); }
-  if(firsts.length){
-    const ti = todayIso(), lim = iso(addMonths(t, -12));
-    const start = [firsts.sort()[0], lim].sort().pop();
-    const span = daysBetween(parse(start), t), pts = [], xl = [];
-    if(span <= 45){ for(let i=0;i<=span;i++) pts.push(iso(addDays(parse(start), i))); }
-    else { let m = new Date(parse(start).getFullYear(), parse(start).getMonth()+1, 0, 12); while(iso(m) < ti){ pts.push(iso(m)); m = new Date(m.getFullYear(), m.getMonth()+2, 0, 12); } pts.push(ti); }
-    if(pts.length >= 2){
-      const cash=[], etf=[], inv=[]; const etfRows = main.filter(r=>isEtf(r.a)), invKnown = etfRows.length && etfRows.every(r=>r.a.base);
-      for(const d of pts){ let c=0, f=0, iv=0; for(const r of main){ const v=Math.max(0, chartValueAt(r.a, d, r.list)); if(isEtf(r.a)){ f+=v; if(invKnown) iv+=investedAt(r.a, d, r.list); } else c+=v; } cash.push(c); etf.push(f); inv.push(invKnown && pts.length && d >= etfRows.map(r=>r.a.base.date).sort()[0] ? iv : null); }
-      const n = pts.length;
-      if(span <= 45){ xl.push({i:0, t:dm(parse(pts[0]))}); if(n>6) xl.push({i:Math.floor((n-1)/2), t:dm(parse(pts[Math.floor((n-1)/2)]))}); xl.push({i:n-1, t:'heute'}); }
-      else { pts.forEach((d,i)=>{ if(i===n-1) xl.push({i, t:'heute'}); else if((n-1-i)%3===0 && i < n-2) xl.push({i, t:MSHORT[parse(d).getMonth()]}); }); }
-      const lc=cash[n-1], lf=etf[n-1];
-      const since = `seit ${dm(parse(pts[0]))}${parse(pts[0]).getFullYear()!==t.getFullYear() ? parse(pts[0]).getFullYear() : ''}`;
-      h += `<section class="sec"><div class="sec-h"><h2>Entwicklung</h2><small>${since}</small></div>`;
-      h += `<div class="panel dev"><div class="dev-h"><span><i class="k-bar" style="background:var(--save)"></i>Tagesgeld &amp; Konten</span><b>${fmt(lc)}</b></div>${svgLines(n,[{vals:cash, cls:'l-cash', area:'a-cash', dot:true, dotCls:'sv', noLabel:true}],{xLabels:xl, aria:'Tagesgeld und Konten im Zeitverlauf'})}</div>`;
-      h += `<div class="panel dev" style="margin-top:12px"><div class="dev-h"><span><i class="k-bar" style="background:var(--etf)"></i>ETF &amp; Depot</span><b>${fmt(lf)}</b></div>${svgLines(n,[...(invKnown ? [{vals:inv, cls:'l-cmp'}] : []),{vals:etf, cls:'l-etf', area:'a-etf', dot:true, dotCls:'etf', noLabel:true}],{xLabels:xl, aria:'ETF und Depot im Zeitverlauf'})}${invKnown ? '<div class="chart-legend"><span><i class="k-bar" style="background:var(--etf)"></i>Depotwert</span><span><i class="k-dash"></i>Eingezahlt</span></div>' : ''}</div>`;
-      h += `<p class="flow-diff">Gesamt ${fmt0(lc+lf)}${lc+lf>0 ? `, davon ${Math.round(lf/(lc+lf)*100)} % im ETF und ${100-Math.round(lf/(lc+lf)*100)} % auf Tagesgeld & Konten` : ''}.</p></section>`;
-    } else {
-      h += `<section class="sec"><div class="sec-h"><h2>Entwicklung</h2></div><p class="muted" style="margin:0">Der Verlauf erscheint ab morgen und wächst mit jedem Tag.</p></section>`;
-    }
-  }
+  const firstData = firsts.filter(d => d <= todayIso()).sort()[0];
+  if(firstData) h += devSection(main, firstData);
   if(all.length) h += `<section class="sec"><div class="sec-h"><h2>Letzte Sparbuchungen</h2></div>${all.slice(0,6).map(txRow).join('')}</section>`;
   return h;
+}
+
+function devSection(rows, firstData){
+  const R = S.ui.devRange, pct = S.ui.devMode==='pct';
+  const {pts, start, clamped} = devPoints(R, firstData), n = pts.length;
+  let h = `<section class="sec" id="dev"><div class="sec-h"><h2>Entwicklung</h2><small>${clamped || R==='MAX' ? `seit ${dm(parse(start))}${parse(start).getFullYear()!==todayDate().getFullYear() ? parse(start).getFullYear() : ''}` : (R==='1D' ? 'seit gestern' : `ab ${dm(parse(start))}${parse(start).getFullYear()!==todayDate().getFullYear() ? parse(start).getFullYear() : ''}`)}</small></div><div class="panel">`;
+  h += `<div class="seg dev-seg" role="group" aria-label="Zeitraum">${DEV_RANGES.map(([k,l,sh])=>`<button data-action="dev-range" data-v="${k}" aria-pressed="${k===R}" aria-label="${l}"><span class="l">${l}</span><span class="s">${sh}</span></button>`).join('')}</div>`;
+  if(n < 2){ return h + `<p class="muted" style="margin:14px 0 4px">Für diesen Zeitraum gibt es noch keine Entwicklung – deine Daten beginnen heute.</p></div></section>`; }
+  const ser = devSeries(rows, pts), price = latestPrice(rows);
+  const line = (kind, label, color) => {
+    const d = ser[kind]; if(!d) return '';
+    const cls = v => v > 0.00001 ? 'gain' : v < -0.00001 ? 'loss' : '';
+    let r = `<div class="dev-row"><div class="dev-top"><span><i style="background:${color}"></i>${label}</span><b>${fmt(d.now)}</b></div>`;
+    r += `<div class="dev-sub">Veränderung <b class="${cls(d.change)}">${signed(d.change)}</b>${d.deposits ? ` <span class="muted">(davon ${signed(d.deposits)} eingezahlt)</span>` : ''}</div>`;
+    r += `<div class="dev-sub">Rendite <b class="${cls(d.pct)}">${fmtPct(d.pct, 2)}</b> <span class="muted">(${signed(d.gain)} ohne Einzahlungen)</span></div>`;
+    if(kind==='etf' && price){
+      r += `<div class="dev-sub dev-price">Kurs <b>${fmtPrice(price.price)}</b>${price.pdate ? `, Schlusskurs ${dm(parse(price.pdate))}` : `, eingetragen ${dm(parse(price.date))}`}${price.chg!=null ? `, Tag <b class="${cls(price.chg)}">${fmtPct(price.chg, 2)}</b>` : ''}${quoteCfg().on && price.acc ? ` <button class="lnk" data-action="quote" data-id="${esc(price.acc.id)}">Kurs abrufen</button>` : ''}</div>`;
+    }
+    return r + `</div>`;
+  };
+  h += line('cash', 'Tagesgeld &amp; Konten', 'var(--save)') + line('etf', 'ETF &amp; Depot', 'var(--etf)');
+  const series = [];
+  if(ser.cash) series.push({vals: pct ? ser.cash.perf : ser.cash.vals, cls:'l-cash', area: pct ? '' : 'a-cash', dot:'sv'});
+  if(ser.etf) series.push({vals: pct ? ser.etf.perf : ser.etf.vals, cls:'l-etf', area: pct ? '' : 'a-etf', dot:'etf'});
+  const mid = Math.floor((n-1)/2), fx = d => { const x=parse(d); return n > 120 ? `${MSHORT[x.getMonth()]} ${String(x.getFullYear()).slice(2)}` : dm(x); };
+  const xl = [{i:0, t:fx(pts[0])}]; if(n > 4) xl.push({i:mid, t:fx(pts[mid])}); xl.push({i:n-1, t:'heute'});
+  h += `<div style="margin-top:12px">${svgDev(n, series, {pct, xLabels:xl, aria: pct ? 'Rendite im Zeitraum' : 'Kontostand und Depotwert im Zeitraum'})}</div>`;
+  h += `<div class="dev-foot"><div class="seg dev-mode" role="group" aria-label="Darstellung">${[['eur','in €'],['pct','in %']].map(([k,l])=>`<button data-action="dev-mode" data-v="${k}" aria-pressed="${(pct?'pct':'eur')===k}">${l}</button>`).join('')}</div></div>`;
+  const tot = (ser.cash ? ser.cash.now : 0) + (ser.etf ? ser.etf.now : 0);
+  h += `<p class="flow-diff">Gesamt ${fmt0(tot)}${tot>0 && ser.etf ? `, davon ${Math.round(ser.etf.now/tot*100)} % im ETF` : ''}. <span class="muted">Rendite = Wertentwicklung ohne deine Einzahlungen, Veränderung = einschließlich Einzahlungen.</span></p>`;
+  return h + `</div></section>`;
 }
 
 /* ---------- Sparkonto bearbeiten / Stand eintragen ---------- */
@@ -1481,6 +1573,7 @@ function formHtml(){
   h += `<div id="f-dir" ${F.type==='save'?'':'hidden'} style="margin-top:12px">${seg('f-dir', [['in','Einzahlen'],['out','Entnehmen']], F.dir)}</div>`;
   h += `<span class="flabel" id="f-cat-label">${F.type==='save' ? 'Konto' : 'Kategorie'}</span><div class="chips" id="f-cats">${catChips()}</div>`;
   if(F.quick) h += `<button class="primary quick-save" data-action="f-save">Speichern</button>`;
+  h += `<p class="hint" id="f-advhint" ${F.type==='income' && advCat(F.cat) ? '' : 'hidden'}>Bezüge im Voraus: Ein Eingang ab dem 15. zählt für den Folgemonat.</p>`;
   if(isRule){
     h += `<div class="grid2"><label><span class="flabel">${editing?'Beginnt am':'Erste Fälligkeit'}</span><input id="f-date" class="inp" type="date" value="${esc(F.date)}"></label><label><span class="flabel">Rhythmus</span><select id="f-freq" class="inp">${Object.entries(FREQ).map(([k,v])=>`<option value="${k}" ${k===F.freq?'selected':''}>${v}</option>`).join('')}</select></label></div>`;
     h += `<label><span class="flabel">Endet am (optional)</span><input id="f-end" class="inp" type="date" value="${esc(F.end||'')}"></label>`;
@@ -1623,6 +1716,9 @@ function settingsHtml(){
     h += `<div class="set-type">${label}</div><div class="chips">${visibleCats(type).map(c=>`<span class="chip del">${esc(c.icon)} ${esc(c.name)}${c.id===FALLBACK[type]?'':`<button data-action="cat-del" data-type="${type}" data-id="${esc(c.id)}" aria-label="${esc(c.name)} entfernen">×</button>`}</span>`).join('')}</div>`;
     h += `<div class="row" style="margin-top:8px"><input class="inp emoji-inp" id="ce-${type}" maxlength="8" placeholder="🙂" aria-label="Symbol"><input class="inp" id="cn-${type}" maxlength="30" placeholder="Neue Kategorie" aria-label="Name der neuen Kategorie"><button class="btn" data-action="cat-add" data-type="${type}">Hinzufügen</button></div>`;
   }
+  const adv = S.settings.adv || {on:false, cats:[]};
+  h += `<h3 class="set-h">Gehalt im Voraus (Beamte)</h3><div class="switch-row" style="margin-top:0;border-top:0;padding-top:0"><div><b>Bezüge zählen für den Folgemonat</b><small>Eingang ab dem 15. zählt für den nächsten Monat, z. B. Eingang am 30.09. → Oktober. Feste Bezüge bucht die App bei Wochenende oder Feiertag am Arbeitstag davor.</small></div><label class="switch"><input type="checkbox" id="adv-on" ${adv.on?'checked':''}><span></span></label></div>`;
+  if(adv.on) h += `<span class="flabel" style="margin-top:4px">Gilt für diese Einnahme-Kategorien</span><div class="chips">${visibleCats('income').map(c=>`<button class="chip" data-action="adv-cat" data-id="${esc(c.id)}" aria-pressed="${adv.cats.includes(c.id)}">${esc(c.icon)} ${esc(c.name)}</button>`).join('')}</div>`;
   h += `<h3 class="set-h">Wiederkehrende Buchungen</h3><div class="switch-row" style="margin-top:0;border-top:0;padding-top:0"><div><b>Nur an Arbeitstagen buchen</b><small>Fällt ein Termin auf ein Wochenende oder einen gesetzlichen Feiertag in Baden-Württemberg, bucht die App am nächsten Arbeitstag.</small></div><label class="switch"><input type="checkbox" id="wd-on" ${shiftOn()?'checked':''}><span></span></label></div>`;
   h += `<h3 class="set-h">Schnellerfassung</h3><p class="muted" style="margin:0">Beim Öffnen der App erscheint sofort „Neue Ausgabe“ mit Ziffernblock: Betrag tippen, Kategorie wählen, speichern. Tipp: Zieh das App-Symbol ins Dock unten auf dem Home-Bildschirm – dann bist du von überall mit einem Tipp beim Eintragen.</p>`;
   h += `<div class="switch-row"><div><b>Beim Öffnen direkt erfassen</b><small>${uiCfg().quick ? 'Eingeschaltet' : 'Ausgeschaltet'}</small></div><label class="switch"><input type="checkbox" id="quick-on" ${uiCfg().quick?'checked':''}><span></span></label></div>`;
@@ -1666,10 +1762,10 @@ function csvData(){
   // Formel-Injektion in Excel verhindern: Texte, die mit = + - @ beginnen, werden entschärft
   const safe = v => /^[=+\-@\t\r]/.test(v) ? "'"+v : v;
   const q = v => { v=String(v??''); return /[;"\r\n]/.test(v) ? `"${v.replace(/"/g,'""')}"` : v; };
-  const rows=[['Datum','Typ','Kategorie','Betrag','Notiz','Wiederkehrend']];
+  const rows=[['Datum','Typ','Kategorie','Betrag','Notiz','Wiederkehrend','Zählt für Monat']];
   for(const t of S.tx.slice().reverse()){
     const amt = t.type==='expense' ? -t.amount : t.amount;
-    rows.push([dmy(parse(t.date)), TYPE_NAME[t.type], safe(catOf(t.type,t.cat).name), (amt/100).toFixed(2).replace('.',','), safe(t.note||''), t.recurringId?'ja':'']);
+    rows.push([dmy(parse(t.date)), TYPE_NAME[t.type], safe(catOf(t.type,t.cat).name), (amt/100).toFixed(2).replace('.',','), safe(t.note||''), t.recurringId?'ja':'', (()=>{ const e=effDate(t).slice(0,7); return e!==t.date.slice(0,7) ? `${e.slice(5)}.${e.slice(0,4)}` : ''; })()]);
   }
   return '\ufeff' + rows.map(r=>r.map(q).join(';')).join('\r\n');
 }
@@ -1770,10 +1866,11 @@ const A = {
     $('#f-dir').hidden = F.type!=='save';
     const cl=$('#f-cat-label'); if(cl) cl.textContent = F.type==='save' ? 'Konto' : 'Kategorie';
     const db=$('#f-dynbox'); if(db) db.hidden = F.type!=='save';
+    const ah=$('#f-advhint'); if(ah) ah.hidden = true;
     const n=$('#f-note'); if(n) n.placeholder = F.type==='expense'?'z. B. Wochenmarkt':F.type==='income'?'z. B. Oktober':'z. B. Sparplan';
   },
   'f-dir'(el){ F.dir = el.dataset.v; el.parentElement.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed', b===el)); },
-  'f-cat'(el){ F.cat = F.cat===el.dataset.v ? null : el.dataset.v; $('#f-cats').querySelectorAll('.chip').forEach(b=>b.setAttribute('aria-pressed', b.dataset.v===F.cat)); },
+  'f-cat'(el){ F.cat = F.cat===el.dataset.v ? null : el.dataset.v; const ah=$('#f-advhint'); if(ah) ah.hidden = !(F.type==='income' && advCat(F.cat)); $('#f-cats').querySelectorAll('.chip').forEach(b=>b.setAttribute('aria-pressed', b.dataset.v===F.cat)); },
   'f-day'(el){ $('#f-date').value = iso(addDays(todayDate(), Number(el.dataset.v))); },
   'f-save'(){ submitForm(); },
   'f-delete'(el){ deleteFromForm(el); },
@@ -1812,6 +1909,9 @@ const A = {
   'acc-save'(){ saveAcc(); },
   quote(el){ const a=accById(el.dataset.id); if(a) fetchQuote(a, el); },
   kp(el){ keypad(el.dataset.k); },
+  'adv-cat'(el){ const a = S.settings.adv; if(!a) return; const id = el.dataset.id; a.cats = a.cats.includes(id) ? a.cats.filter(x=>x!==id) : [...a.cats, id]; Store.saveSettings(); refreshSettings(); render(); },
+  'dev-range'(el){ S.ui.devRange = el.dataset.v; render(); },
+  'dev-mode'(el){ S.ui.devMode = el.dataset.v; render(); },
   'f-dyn'(el){ F.dyn = Number(el.dataset.v) || 0; el.parentElement.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed', b===el)); const pv=$('#f-dynprev'); if(pv) pv.textContent = dynPreview(); },
   'acc-invested'(el){ const a=accById(el.dataset.id); if(a) openAccForm(a, 'invested'); },
   'acc-sym-search'(el){ searchSymbol(el); },
@@ -1858,6 +1958,7 @@ document.addEventListener('input', e=>{
 });
 document.addEventListener('change', e=>{
   if(e.target.id==='f-rec' && F){ F.rec = e.target.checked; $('#f-recopts').hidden = !F.rec; }
+  if(e.target.id==='adv-on'){ const a = S.settings.adv || {on:false, cats:['gehalt']}; a.on = e.target.checked; if(a.on && !a.cats.length) a.cats=['gehalt']; S.settings.adv = a; Store.saveSettings(); refreshSettings(); render(); toast(a.on ? 'Bezüge zählen jetzt für den Folgemonat' : 'Einnahmen zählen wieder im Monat des Eingangs'); }
   if(e.target.id==='wd-on'){ S.settings.workday = e.target.checked; Store.saveSettings(); render(); toast(e.target.checked ? 'Buchungen fallen jetzt auf Arbeitstage' : 'Buchungen fallen auf den Plantermin'); }
   if(e.target.id==='quick-on'){ LS.set(UIKEY, {quick:e.target.checked}); refreshSettings(); toast(e.target.checked ? 'Schnellerfassung eingeschaltet' : 'Schnellerfassung ausgeschaltet'); }
   if(e.target.id==='q-on'){ const q=quoteCfg(); setQuoteCfg({on:e.target.checked, key:q.key}); refreshSettings(); render(); }
