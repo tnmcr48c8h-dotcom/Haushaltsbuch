@@ -469,10 +469,24 @@ function defaultSettings(){ const c={}; for(const k in DEFAULT_CATS) c[k]=DEFAUL
 const TYPES = ['expense','income','save'];
 const isDate = v => typeof v==='string' && /^\d{4}-\d{2}-\d{2}$/.test(v) && iso(parse(v))===v;
 const str = (v,n) => String(v==null ? '' : v).slice(0,n);
-const firstChars = (v,n) => {
+const firstChars = v => {
   const s = String(v||'');
-  try{ if(window.Intl && Intl.Segmenter){ return Array.from(new Intl.Segmenter('de',{granularity:'grapheme'}).segment(s), x=>x.segment).slice(0,1).join('').slice(0,16); } }catch(e){}
-  return Array.from(s).slice(0,n).join('');
+  // genau ein (ggf. zusammengesetztes) Zeichen; Länge auf 16 ganze Codepoints begrenzt (jedes Standard-Emoji passt vollständig)
+  const cap = x => Array.from(x).slice(0,16).join('');
+  try{ if(window.Intl && Intl.Segmenter){ for(const g of new Intl.Segmenter('de',{granularity:'grapheme'}).segment(s)) return cap(g.segment); return ''; } }catch(e){}
+  // Ohne Intl.Segmenter (ältere Browser): wie bisher bis zu 2 Zeichen – ein längeres zusammengesetztes Emoji (ZWJ, Hautton,
+  // Flagge, Keycap) am Anfang aber nicht zerschneiden
+  const cp = Array.from(s); if(!cp.length) return '';
+  const ri = c => /^[\u{1F1E6}-\u{1F1FF}]$/u.test(c);
+  let out = cp[0], i = 1;
+  if(ri(cp[0]) && cp[1] && ri(cp[1])){ out += cp[1]; i = 2; }
+  while(i < cp.length){
+    const c = cp[i];
+    if(/^[\uFE0E\uFE0F\u20E3\u{1F3FB}-\u{1F3FF}\u{E0020}-\u{E007F}]$/u.test(c) || /^[\u0300-\u036F\u1AB0-\u1AFF\u1DC0-\u1DFF\u20D0-\u20FF\uFE20-\uFE2F]$/.test(c)){ out += c; i++; continue; }
+    if(c === '\u200D' && cp[i+1]){ out += c + cp[i+1]; i += 2; continue; }
+    break;
+  }
+  return Array.from(out).length > 2 ? cap(out) : cp.slice(0,2).join('');
 };
 function cleanAmount(type, v){ const a=Math.round(Number(v)); if(!Number.isFinite(a) || a===0 || Math.abs(a)>1e11) return null; return type==='save' ? a : Math.abs(a); }
 function cleanTx(t){
@@ -531,7 +545,7 @@ function normalizeSettings(d){
   const src = (d && typeof d==='object') ? d : {};
   for(const k of TYPES){
     const list = src.categories && Array.isArray(src.categories[k]) ? src.categories[k] : def.categories[k];
-    const cats = list.filter(c=>c && c.id).map(c=>{ const o={id:str(c.id,60), name:str(c.name,30) || 'Ohne Namen', icon:firstChars(c.icon,2) || '🏷️'}; if(c.hidden) o.hidden=true; if(k==='save') Object.assign(o, cleanAcc(c, o.id)); return o; });
+    const cats = list.filter(c=>c && c.id).map(c=>{ const o={id:str(c.id,60), name:str(c.name,30) || 'Ohne Namen', icon:firstChars(c.icon) || '🏷️'}; if(c.hidden) o.hidden=true; if(k==='save') Object.assign(o, cleanAcc(c, o.id)); return o; });
     if(!cats.some(c=>c.id===FALLBACK[k])) cats.push(JSON.parse(JSON.stringify(def.categories[k].find(c=>c.id===FALLBACK[k]))));
     if(k==='save' && !(Number(src.v)>=2) && !cats.some(c=>c.id==='tagesgeld')) cats.unshift({id:'tagesgeld', name:'Tagesgeld', icon:'🏦', kind:'cash', snaps:[]});
     out.categories[k] = cats;
@@ -683,7 +697,8 @@ function occurrencesN(rule, afterIso, uptoIso){
 }
 const occurrences = (rule, a, u) => occurrencesN(rule, a, u).map(o=>o.d);
 function nextDueN(rule){
-  const t = todayIso(), sh=shiftOn(), back=sh && ruleBack(rule);
+  // wie bei plannedItems/runRecurring: Termine bis zur Merkmarke „until“ sind bereits erledigt und werden nie (erneut) gebucht
+  const t = [todayIso(), rule.until||''].sort().pop(), sh=shiftOn(), back=sh && ruleBack(rule);
   for(let n=0; n<2000; n++){
     const nom = iso(nth(rule,n));
     if(rule.end && nom > rule.end) return null;
@@ -693,6 +708,31 @@ function nextDueN(rule){
   return null;
 }
 const nextDue = rule => { const o=nextDueN(rule); return o ? o.d : null; };
+// Eine fällige Rate als Buchung (Kennung r-<Regel>-<Buchungstag>)
+const rateTx = (r, o) => ({id:`r-${r.id}-${o.d}`, type:r.type, amount:amountAt(r, o.nom), cat:r.cat, note:r.note||'', date:o.d, recurringId:r.id, created:Date.now()});
+// Umschalten von Arbeitstag-Regel bzw. Gehalt im Voraus verschiebt die Buchungstage der Raten nahe der Merkmarke.
+// Was vorher erledigt war (gebucht oder bewusst gelöscht), bleibt erledigt; was offen war, bleibt offen:
+// - erledigt, fällt jetzt später → Merkmarke dorthin (sonst zweite Buchung bzw. „geplant“)
+// - offen, fällt jetzt auf die Merkmarke oder früher → jetzt buchen (sonst fiele die Rate weg)
+// Der Plan selbst ändert sich nicht; die Verschiebung beträgt nur wenige Tage, zwei Raten liegen ≥ 7 Tage auseinander.
+// Pausierte Regeln buchen nichts, ihre Merkmarke wird aber ebenso nachgeführt.
+function shiftChanged(apply){
+  const rules = S.settings.recurring.filter(r => r.until), around = (r, n) => iso(addDays(parse(r.until), n));
+  const open = new Map(rules.map(r => [r, new Set(occurrencesN(r, r.until, around(r, 30)).map(o=>o.nom))]));
+  apply();
+  const t = todayIso(), have = new Set(S.tx.map(x=>x.id)), add = [];
+  for(const r of rules){
+    for(const o of occurrencesN(r, around(r, -14), around(r, 14))){
+      const wasOpen = open.get(r).has(o.nom);
+      if(!wasOpen && o.d > r.until) r.until = o.d;
+      else if(wasOpen && r.active && o.d <= r.until && !have.has(`r-${r.id}-${o.d}`) && !have.has(`r-${r.id}-${o.nom}`)){
+        if(o.d <= t) add.push(rateTx(r, o)); else r.until = iso(addDays(parse(o.d), -1)); // künftige Rate: am Fälligkeitstag buchen
+      }
+    }
+  }
+  if(add.length){ S.tx.push(...add); sortTx(); }
+  Store.save();
+}
 let recurringBusy = false;
 async function runRecurring(){
   if(!Store.ready || recurringBusy || !S.settings.recurring.length) return;
@@ -701,12 +741,14 @@ async function runRecurring(){
     const t = todayIso(); const have = new Set(S.tx.map(x=>x.id)); const add=[]; let changed=false;
     for(const r of S.settings.recurring){
       if(!r.active) continue;
-      const after = r.until || iso(addDays(parse(r.start),-1));
+      // Noch nie gelaufen: ab einschließlich des ersten Buchungstags suchen. Bezüge im Voraus können vor den Start
+      // vorgezogen werden (z. B. Start Sa 31.01. → Buchung Fr 30.01.).
+      const after = r.until || iso(addDays(parse(ruleBack(r) && shiftOn() ? toWorkdayBack(r.start) : r.start), -1));
       if(after >= t) continue;
       for(const o of occurrencesN(r, after, t)){
         const id = `r-${r.id}-${o.d}`;
         // auch unter dem Plantermin bereits gebuchte Raten erkennen (vor Einführung der Arbeitstag-Regel)
-        if(!have.has(id) && !have.has(`r-${r.id}-${o.nom}`)) add.push({id, type:r.type, amount:amountAt(r, o.nom), cat:r.cat, note:r.note||'', date:o.d, recurringId:r.id, created:Date.now()});
+        if(!have.has(id) && !have.has(`r-${r.id}-${o.nom}`)) add.push(rateTx(r, o));
       }
       r.until = t; changed = true;
     }
@@ -1451,7 +1493,7 @@ function devSection(rows, firstData){
 function accFormHtml(){
   const etf = F.kind==='etf', editing=!!F.id, a = editing ? accById(F.id) : null;
   let h = `<div class="sheet-head"><h2>${editing ? esc(a.name) : 'Neues Sparkonto'}</h2><button class="icon-btn" data-action="close" aria-label="Schließen">${ICON.close}</button></div>`;
-  h += `<span class="flabel">Name</span><div class="row"><input id="acc-icon" class="inp emoji-inp" maxlength="8" value="${esc(F.icon)}" aria-label="Symbol"><input id="acc-name" class="inp" maxlength="30" placeholder="z. B. Tagesgeld" value="${esc(F.name)}" aria-label="Name"></div>`;
+  h += `<span class="flabel">Name</span><div class="row"><input id="acc-icon" class="inp emoji-inp" maxlength="32" value="${esc(F.icon)}" aria-label="Symbol"><input id="acc-name" class="inp" maxlength="30" placeholder="z. B. Tagesgeld" value="${esc(F.name)}" aria-label="Name"></div>`;
   if(editing) h += `<span class="flabel">Art</span><span class="kind-badge kind-${etf?'etf':'cash'}">${etf ? 'ETF / Depot' : 'Tagesgeld / Konto'}</span>`;
   else h += `<span class="flabel">Art</span>${seg('acc-kind', [['cash','Tagesgeld / Konto'],['etf','ETF / Depot']], F.kind)}<p class="muted" style="margin:6px 0 0;font-size:13.5px">Die Art legst du beim Anlegen einmal fest.</p>`;
   h += `<div id="acc-etf" ${etf?'':'hidden'}><label><span class="flabel">ISIN (optional)</span><input id="acc-isin" class="inp" maxlength="12" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="z. B. IE00…" value="${esc(F.isin)}"></label>`;
@@ -1486,7 +1528,7 @@ function saveAcc(){
   if(F.id){ const ex = accById(F.id); if(ex) F.kind = ex.kind==='etf' ? 'etf' : 'cash'; }
   const etf = F.kind==='etf';
   const name = $('#acc-name').value.trim().slice(0,30) || (etf ? 'ETF-Depot' : 'Tagesgeld');
-  const icon = firstChars($('#acc-icon').value.trim(),2) || (etf ? '📈' : '🏦');
+  const icon = firstChars($('#acc-icon').value.trim()) || (etf ? '📈' : '🏦');
   const isin = ($('#acc-isin') ? $('#acc-isin').value : '').toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,12);
   if(etf && isin && !/^[A-Z]{2}[A-Z0-9]{9}\d$/.test(isin)){ toast('Die ISIN sieht nicht vollständig aus (12 Zeichen, z. B. IE00B3YLTY66).'); return; }
   let date = $('#acc-date').value || todayIso(); if(date > todayIso()) date = todayIso();
@@ -1538,18 +1580,22 @@ function saveAcc(){
 }
 
 /* ---------- Eingabe-Sheet ---------- */
-let F = null;
+let F = null, sheetT = 0, sheetRaf = 0;
 function openSheet(html, type){
   const sh=$('#sheet'), sc=$('#scrim');
+  clearTimeout(sheetT); // ein noch laufendes Schließen darf das neue Fenster nicht leeren und verstecken
   sh.innerHTML = `<div class="grab"></div>` + html; sh.dataset.type = type||'expense';
   sh.hidden=false; sc.hidden=false; document.body.classList.add('locked');
-  requestAnimationFrame(()=>{ sh.classList.add('open'); sc.classList.add('open'); });
+  cancelAnimationFrame(sheetRaf);
+  sheetRaf = requestAnimationFrame(()=>{ sh.classList.add('open'); sc.classList.add('open'); });
   sh.scrollTop = 0;
 }
 function closeSheet(){
   const sh=$('#sheet'), sc=$('#scrim');
   sh.classList.remove('open'); sc.classList.remove('open'); document.body.classList.remove('locked'); if(document.activeElement && document.activeElement.blur) document.activeElement.blur();
-  setTimeout(()=>{ if(!sh.classList.contains('open')){ sh.hidden=true; sc.hidden=true; sh.innerHTML=''; } }, 280);
+  cancelAnimationFrame(sheetRaf); // ein noch ausstehendes Öffnen darf das Fenster nicht wieder aufziehen
+  clearTimeout(sheetT);
+  sheetT = setTimeout(()=>{ if(!sh.classList.contains('open')){ sh.hidden=true; sc.hidden=true; sh.innerHTML=''; } }, 280);
   F = null;
 }
 function catChips(){
@@ -1621,7 +1667,7 @@ function keypad(k){
 }
 function openTxForm(tx, preset={}){
   const ruleExists = tx && tx.recurringId && S.settings.recurring.some(r=>r.id===tx.recurringId);
-  F = tx ? {mode:'tx', quick:false, forMonth:tx.forMonth||null, id:tx.id, type:tx.type, amount:Math.abs(tx.amount), dir:tx.amount<0?'out':'in', cat:tx.cat, date:tx.date, note:tx.note||'', recurringId:ruleExists ? tx.recurringId : null, rec:false, freq:'monthly', end:'', created:tx.created}
+  F = tx ? {mode:'tx', quick:false, forMonth:tx.forMonth||null, id:tx.id, type:tx.type, amount:Math.abs(tx.amount), dir:tx.amount<0?'out':'in', cat:tx.cat, date:tx.date, note:tx.note||'', recurringId:ruleExists ? tx.recurringId : null, origRid:tx.recurringId||null, rec:false, freq:'monthly', end:'', created:tx.created}
          : {mode:'tx', quick:!!preset.quick, id:null, type:preset.type||'expense', amount:0, dir:'in', cat:preset.cat||null, date:todayIso(), note:'', recurringId:null, rec:!!preset.rec, freq:'monthly', end:'', dyn:0};
   openSheet(formHtml(), F.type);
   if(!tx && !F.quick){ const a=$('#f-amount'); if(a) a.focus({preventScroll:true}); }
@@ -1656,7 +1702,7 @@ async function submitForm(){
       const wasActive = r.active;
       Object.assign(r, {type:F.type, amount, cat, note:F.note, freq:F.freq, start:F.date, end, active:F.active});
       if(F.type==='save' && F.dyn) r.dyn = F.dyn; else delete r.dyn;
-      if(F.active && !wasActive) r.until = t;
+      if(F.active && !wasActive) r.until = [t, r.until||''].sort().pop();
     } else {
       const nr = {id:newId(), type:F.type, amount, cat, note:F.note, freq:F.freq, start:F.date, end, active:true, until:null};
       if(F.type==='save' && F.dyn) nr.dyn = F.dyn;
@@ -1666,22 +1712,30 @@ async function submitForm(){
     setTimeout(runRecurring, 900); return;
   }
   // Einzelbuchung
-  let ruleId = F.recurringId;
+  let ruleId = F.recurringId, firstDay = null;
   if(F.rec && !ruleId){
     ruleId = newId();
     const nr = {id:ruleId, type:F.type, amount, cat, note:F.note, freq:F.freq, start:F.date, end, active:true, until: (F.id || F.date <= t) ? F.date : null};
     if(F.type==='save' && F.dyn) nr.dyn = F.dyn;
+    // Erster Buchungstag der Regel (ggf. auf einen Arbeitstag verschoben, Bezüge im Voraus auch vor den Starttag)
+    firstDay = !shiftOn() ? F.date : ruleBack(nr) ? toWorkdayBack(F.date) : toWorkday(F.date);
+    // Die erste Fälligkeit ist diese Buchung selbst. Fällt sie auf einen Nicht-Arbeitstag, würde die Regel sie sonst
+    // am nächsten Arbeitstag ein zweites Mal buchen (bzw. dort als „geplant“ anzeigen). Die Merkmarke liegt dann höchstens
+    // 4 Tage nach dieser Buchung (längste Folge freier Tage, z. B. Ostern); zwei Raten liegen mindestens 7 Tage auseinander.
+    // Jede Rate bis zur Merkmarke – auch nach einem Bearbeiten der Regel – gehört also zum Zeitraum dieser Buchung.
+    if(nr.until && firstDay > nr.until) nr.until = firstDay;
     S.settings.recurring.push(nr);
   }
   if(F.rec && F.date > t && !F.id){
-    const rule = S.settings.recurring.find(x=>x.id===ruleId), first = rule ? nextDue(rule) : null, isSave = F.type==='save';
+    const rule = S.settings.recurring.find(x=>x.id===ruleId), first = firstDay || (rule ? nextDue(rule) : null), isSave = F.type==='save';
     closeSheet(); render(); Store.saveSettings();
     toast(`${isSave ? 'Sparplan' : 'Wiederkehrende Buchung'} angelegt – erste Buchung am ${first ? dmy(parse(first)) : '–'}. Zu finden unter Fixkosten${isSave ? ' und bei Sparen unter „Geplant“' : ' und unter Buchungen bei „Geplant“'}.`);
-    return;
+    setTimeout(runRecurring, 900); return;
   }
   const tx = {id: F.id || (ruleId && F.rec ? `r-${ruleId}-${F.date}` : newId()), type:F.type, amount, cat, date:F.date, note:F.note, created:F.created||Date.now()};
   if(F.type==='income' && advCat(cat) && F.forMonth && F.forMonth !== incomeEff(F.date, cat).slice(0,7)) tx.forMonth = F.forMonth;
   if(ruleId) tx.recurringId = ruleId;
+  else if(F.origRid) tx.recurringId = F.origRid; // Herkunft einer automatisch gebuchten Rate bleibt beim Bearbeiten erhalten (auch wenn die Regel gelöscht ist)
   const i = S.tx.findIndex(x=>x.id===tx.id); if(i>=0) S.tx[i]=tx; else S.tx.push(tx);
   sortTx();
   const editing = !!F.id, madeRule = F.rec && !F.recurringId;
@@ -1725,7 +1779,7 @@ function settingsHtml(){
   h += `<h3 class="set-h">Kategorien</h3>`;
   for(const [type,label] of [['expense','Ausgaben'],['income','Einnahmen'],['save','Sparkonten']]){
     h += `<div class="set-type">${label}</div><div class="chips">${visibleCats(type).map(c=>`<span class="chip del">${esc(c.icon)} ${esc(c.name)}${c.id===FALLBACK[type]?'':`<button data-action="cat-del" data-type="${type}" data-id="${esc(c.id)}" aria-label="${esc(c.name)} entfernen">×</button>`}</span>`).join('')}</div>`;
-    h += `<div class="row" style="margin-top:8px"><input class="inp emoji-inp" id="ce-${type}" maxlength="8" placeholder="🙂" aria-label="Symbol"><input class="inp" id="cn-${type}" maxlength="30" placeholder="Neue Kategorie" aria-label="Name der neuen Kategorie"><button class="btn" data-action="cat-add" data-type="${type}">Hinzufügen</button></div>`;
+    h += `<div class="row" style="margin-top:8px"><input class="inp emoji-inp" id="ce-${type}" maxlength="32" placeholder="🙂" aria-label="Symbol"><input class="inp" id="cn-${type}" maxlength="30" placeholder="Neue Kategorie" aria-label="Name der neuen Kategorie"><button class="btn" data-action="cat-add" data-type="${type}">Hinzufügen</button></div>`;
   }
   const adv = S.settings.adv || {on:false, cats:[]};
   h += `<h3 class="set-h">Gehalt im Voraus (Beamte)</h3><div class="switch-row" style="margin-top:0;border-top:0;padding-top:0"><div><b>Bezüge zählen für den Folgemonat</b><small>Eingang ab dem 15. zählt für den nächsten Monat, z. B. Eingang am 30.09. → Oktober. Feste Bezüge bucht die App bei Wochenende oder Feiertag am Arbeitstag davor.</small></div><label class="switch"><input type="checkbox" id="adv-on" ${adv.on?'checked':''}><span></span></label></div>`;
@@ -1790,41 +1844,60 @@ async function backup(){
   const r = await offerFile(`haushaltsbuch-sicherung-${todayIso()}-${pad(now.getHours())}${pad(now.getMinutes())}.json`, data, 'Sicherung');
   if(r==='saved'){ S.meta.lastBackup = Date.now(); S.meta.changes = -1; Store.save(); if($('#out-box')) refreshSettings(); render(); toast('Sicherung erstellt'); }
 }
+// Ist der aktuelle Stand völlig leer (wie direkt nach „Alle Daten löschen“), gibt es nichts zu sichern –
+// dann den vorhandenen Notfall-Stand behalten statt ihn durch einen leeren zu ersetzen. Enthält der Stand irgendetwas,
+// wird wie bisher gesichert (es gibt nur einen Notfall-Stand; so geht nie etwas verloren, das vorher erhalten blieb).
+const keepRescue = () => !!Store.rescue && !S.tx.length && JSON.stringify(normalizeSettings(S.settings))===JSON.stringify(normalizeSettings(defaultSettings()));
 async function importData(text){
   let d;
   try{ d = JSON.parse(String(text||'').replace(/^\uFEFF/,'')); }catch(e){ toast('Die Datei ist keine gültige Sicherung.'); return; }
   if(!d || typeof d!=='object' || !Array.isArray(d.tx)){ toast('Die Datei ist keine gültige Sicherung.'); return; }
   const tx = cleanTxList(d.tx), set = normalizeSettings(d.settings);
-  if(!tx.length && !set.recurring.length){ toast('In der Sicherung wurden keine Buchungen gefunden.'); return; }
+  // Auch Sicherungen, die nur Kontostände/Depotwerte enthalten (ohne Buchungen), sind gültig
+  const accData = c => (c.snaps||[]).length || c.base;
+  if(!tx.length && !set.recurring.length && !set.categories.save.some(accData)){ toast('In der Sicherung wurden keine Buchungen gefunden.'); return; }
   // Zusammenführen: nichts Vorhandenes wird gelöscht oder überschrieben
-  await Store.snapshot('Vor dem Einlesen einer Sicherung');
-  const byId = new Map(S.tx.map(t=>[t.id,t])); let added=0;
+  if(!keepRescue()) await Store.snapshot('Vor dem Einlesen einer Sicherung');
+  const byId = new Map(S.tx.map(t=>[t.id,t])); let added=0, snapsAdded=0;
   for(const t of tx){ if(!byId.has(t.id)){ byId.set(t.id, t); added++; } }
   S.tx = [...byId.values()]; sortTx();
   for(const k of TYPES) for(const c of set.categories[k]){
     const loc = S.settings.categories[k].find(x=>x.id===c.id);
-    if(!loc){ S.settings.categories[k].push(c); continue; }
+    if(!loc){ S.settings.categories[k].push(c); snapsAdded += (c.snaps||[]).length; continue; }
     if(k!=='save') continue;
     const empty = !(loc.snaps||[]).length && !loc.base;
+    // Börsenkürzel nur für dasselbe Wertpapier übernehmen (ein leeres Konto wird ganz aus der Sicherung übernommen)
+    const sameSec = loc.isin ? loc.isin===c.isin : (empty || !c.isin);
     if(empty){ loc.kind=c.kind; loc.name=c.name; loc.icon=c.icon; }
     const have = new Set((loc.snaps||[]).map(x=>x.date));
     const extra = (c.snaps||[]).filter(x=>!have.has(x.date));
+    snapsAdded += extra.length;
     if(extra.length) loc.snaps = [...(loc.snaps||[]), ...extra].sort((x,y)=>x.date<y.date?-1:x.date>y.date?1:0);
     if(!loc.base && c.base) loc.base = c.base;
     if(!loc.isin && c.isin) loc.isin = c.isin;
+    // Börsenkürzel (samt Währung) steht in der Sicherung und wird wie die ISIN übernommen, wenn hier noch keins eingetragen ist
+    if(!loc.symbol && c.symbol && loc.kind==='etf' && c.kind==='etf' && sameSec){ loc.symbol = c.symbol; if(c.cur) loc.cur = c.cur; else delete loc.cur; }
   }
   let rules=0; for(const r of set.recurring) if(!S.settings.recurring.some(x=>x.id===r.id)){ S.settings.recurring.push(r); rules++; }
   if(!Store.save()) return;
   refreshSettings(); render(); runRecurring();
-  toast(`Sicherung eingelesen: ${added} neue Buchung${added===1?'':'en'}${rules?`, ${rules} Fixkosten`:''}`);
+  toast(`Sicherung eingelesen: ${added} neue Buchung${added===1?'':'en'}${rules?`, ${rules} Fixkosten`:''}${snapsAdded?`, ${snapsAdded} Kontost${snapsAdded===1?'and':'ände'}`:''}`);
 }
 async function wipe(btn){
   if(!btn.classList.contains('armed')){ btn.classList.add('armed'); btn.style.paddingLeft=''; btn.style.textAlign=''; btn.textContent='Wirklich alles löschen? Tippe erneut.'; return; }
-  await Store.snapshot('Vor dem Löschen aller Daten');
+  // Nur wenn der Notfall-Stand wirklich angelegt wurde, ist das Löschen umkehrbar – sonst ehrlich nachfragen
+  // (bei erneutem Tippen nach einem Fehlschlag wird der Notfall-Stand noch einmal versucht)
+  const noRescue = btn.dataset.noRescue === '1', kept = keepRescue();
+  const rescued = kept || await Store.snapshot('Vor dem Löschen aller Daten');
+  if(!rescued && !noRescue){
+    btn.dataset.noRescue = '1';
+    btn.textContent = 'Notfall-Stand konnte nicht angelegt werden – gelöschte Daten wären endgültig weg. Trotzdem löschen? Tippe erneut.';
+    return;
+  }
   S.tx = []; S.settings = defaultSettings(); S.meta = {lastBackup:0, changes:0};
   try{ localStorage.removeItem(QKEY); localStorage.removeItem(UIKEY); }catch(e){}
   Store.save();
-  closeSheet(); render(); toast('Alle Daten gelöscht – unter Einstellungen wiederherstellbar');
+  closeSheet(); render(); toast(!rescued ? 'Alle Daten endgültig gelöscht' : kept ? 'Alle Daten gelöscht – der bisherige Notfall-Stand bleibt unter Einstellungen erhalten' : 'Alle Daten gelöscht – unter Einstellungen wiederherstellbar');
 }
 async function restoreRescue(btn){
   const r = Store.rescue; if(!r) return;
@@ -1888,7 +1961,7 @@ const A = {
   'f-delete'(el){ deleteFromForm(el); },
   settings(){ openSettings(); },
   async 'cat-add'(el){
-    const type=el.dataset.type, name=$('#cn-'+type).value.trim().slice(0,30), icon=firstChars($('#ce-'+type).value.trim(),2) || '🏷️';
+    const type=el.dataset.type, name=$('#cn-'+type).value.trim().slice(0,30), icon=firstChars($('#ce-'+type).value.trim()) || '🏷️';
     if(!name){ toast('Bitte einen Namen eingeben.'); $('#cn-'+type).focus(); return; }
     const hit = S.settings.categories[type].find(c=>c.name.toLowerCase()===name.toLowerCase());
     if(hit && !hit.hidden){ toast('Diese Kategorie gibt es schon.'); return; }
@@ -1923,7 +1996,7 @@ const A = {
   kp(el){ keypad(el.dataset.k); },
   'show-shifted'(el){ S.ui.f = {type:'income', cat:null, catType:null, range:{s:el.dataset.s, e:el.dataset.e, label:shortLabel(rangeFor('month', parse(el.dataset.s)))}, q:''}; S.ui.view='list'; S.ui.limit=150; render(); window.scrollTo(0,0); },
   'f-for'(el){ const d = ($('#f-date') && $('#f-date').value) || F.date; const auto = incomeEff(d, F.cat).slice(0,7); F.forMonth = el.dataset.v===auto ? null : el.dataset.v; el.parentElement.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed', b===el)); },
-  'adv-cat'(el){ const a = S.settings.adv; if(!a) return; const id = el.dataset.id; a.cats = a.cats.includes(id) ? a.cats.filter(x=>x!==id) : [...a.cats, id]; Store.saveSettings(); refreshSettings(); render(); },
+  'adv-cat'(el){ const a = S.settings.adv; if(!a) return; const id = el.dataset.id; shiftChanged(() => { a.cats = a.cats.includes(id) ? a.cats.filter(x=>x!==id) : [...a.cats, id]; }); refreshSettings(); render(); },
   'dev-range'(el){ S.ui.devRange = el.dataset.v; render(); },
   'dev-mode'(el){ S.ui.devMode = el.dataset.v; render(); },
   'f-dyn'(el){ F.dyn = Number(el.dataset.v) || 0; el.parentElement.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed', b===el)); const pv=$('#f-dynprev'); if(pv) pv.textContent = dynPreview(); },
@@ -1947,8 +2020,11 @@ const A = {
 document.addEventListener('click', e=>{
   const el = e.target.closest('[data-action]'); if(!el) return;
   if(!Store.ready){ e.preventDefault(); return; }
+  // Während das Eingabefenster nach dem Schließen noch herausgleitet, ist F schon leer: Tipps auf Formular-Knöpfe dann ignorieren statt einen Fehler auszulösen
+  if(!F && FORM_ACTIONS.has(el.dataset.action)){ e.preventDefault(); return; }
   const fn = A[el.dataset.action]; if(fn){ e.preventDefault(); fn(el, e); }
 });
+const FORM_ACTIONS = new Set(['f-type','f-dir','f-cat','f-for','f-dyn','acc-sym-pick']);
 $('#scrim').addEventListener('click', closeSheet);
 document.addEventListener('keydown', e=>{
   if(e.key==='Escape' && !$('#sheet').hidden) closeSheet();
@@ -1973,8 +2049,8 @@ document.addEventListener('input', e=>{
 document.addEventListener('change', e=>{
   if(e.target.id==='f-date' && F && F.mode!=='rule'){ F.forMonth = null; const ah=$('#f-advhint'); if(ah && !ah.hidden) ah.innerHTML = advBoxHtml(); }
   if(e.target.id==='f-rec' && F){ F.rec = e.target.checked; $('#f-recopts').hidden = !F.rec; }
-  if(e.target.id==='adv-on'){ const a = S.settings.adv || {on:false, cats:['gehalt']}; a.on = e.target.checked; if(a.on && !a.cats.length) a.cats=['gehalt']; S.settings.adv = a; Store.saveSettings(); refreshSettings(); render(); toast(a.on ? 'Bezüge zählen jetzt für den Folgemonat' : 'Einnahmen zählen wieder im Monat des Eingangs'); }
-  if(e.target.id==='wd-on'){ S.settings.workday = e.target.checked; Store.saveSettings(); render(); toast(e.target.checked ? 'Buchungen fallen jetzt auf Arbeitstage' : 'Buchungen fallen auf den Plantermin'); }
+  if(e.target.id==='adv-on'){ const a = S.settings.adv || {on:false, cats:['gehalt']}; shiftChanged(() => { a.on = e.target.checked; if(a.on && !a.cats.length) a.cats=['gehalt']; S.settings.adv = a; }); refreshSettings(); render(); toast(a.on ? 'Bezüge zählen jetzt für den Folgemonat' : 'Einnahmen zählen wieder im Monat des Eingangs'); }
+  if(e.target.id==='wd-on'){ shiftChanged(() => { S.settings.workday = e.target.checked; }); render(); toast(e.target.checked ? 'Buchungen fallen jetzt auf Arbeitstage' : 'Buchungen fallen auf den Plantermin'); }
   if(e.target.id==='quick-on'){ LS.set(UIKEY, {quick:e.target.checked}); refreshSettings(); toast(e.target.checked ? 'Schnellerfassung eingeschaltet' : 'Schnellerfassung ausgeschaltet'); }
   if(e.target.id==='q-on'){ const q=quoteCfg(); setQuoteCfg({on:e.target.checked, key:q.key}); refreshSettings(); render(); }
   if(e.target.id==='imp-file' && e.target.files && e.target.files[0]){
